@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useState, type CSSProperties, type FormEvent } from 'react';
 import OfficeScene from './OfficeScene';
-import { agents, type AgentId, type Task, type TaskStatus, type Workspace } from './workflow';
+import { agents, type AgentId, type ProjectSummary, type Task, type TaskStatus, type Workspace } from './workflow';
 
 type Provider = { configured: boolean; model: string | null };
-type Snapshot = { workspace: Workspace | null; provider: Provider; busy: boolean };
+type Snapshot = { workspace: Workspace | null; projects: ProjectSummary[]; provider: Provider; busy: boolean };
 const empty: Workspace = { brief: '', tasks: [], activity: [], running: false, nextId: 1 };
 const columns: { status: TaskStatus; label: string }[] = [
   { status: 'queued', label: 'Queue' }, { status: 'active', label: 'In progress' },
@@ -35,6 +35,7 @@ function AgentAvatar({ id, small = false }: { id: AgentId; small?: boolean }) {
 
 export default function App() {
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
+  const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [provider, setProvider] = useState<Provider>({ configured: false, model: null });
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -54,6 +55,7 @@ export default function App() {
         const snapshot = await api<Snapshot>('/api/workspace');
         if (cancelled) return;
         setWorkspace(snapshot.workspace);
+        setProjects(snapshot.projects);
         setProvider(snapshot.provider);
         setBusy(snapshot.busy);
         if (snapshot.busy) timer = window.setTimeout(() => void refresh(), 1000);
@@ -69,14 +71,24 @@ export default function App() {
     if (busy || !workspace || !provider.configured) return;
     setBusy(true);
     setError('');
+    let finished = false;
+    const poll = window.setInterval(() => {
+      void api<Snapshot>('/api/workspace').then(snapshot => {
+        if (!finished && snapshot.workspace?.id === workspace.id) {
+          setWorkspace(snapshot.workspace);
+          setProjects(snapshot.projects);
+        }
+      }).catch(() => { /* The task request reports the connection error. */ });
+    }, 450);
     try {
-      const result = await api<{ workspace: Workspace }>('/api/steps', {});
+      const result = await api<Snapshot>('/api/steps', { projectId: workspace.id });
       setWorkspace(result.workspace);
-      if (result.workspace.tasks.some(task => task.status === 'failed' || task.status === 'review')) setAuto(false);
+      setProjects(result.projects);
+      if (result.workspace?.tasks.some(task => task.status === 'failed' || task.status === 'review')) setAuto(false);
     } catch (cause) {
       setAuto(false);
       setError(cause instanceof Error ? cause.message : 'Could not run this task.');
-    } finally { setBusy(false); }
+    } finally { finished = true; window.clearInterval(poll); setBusy(false); }
   }, [busy, workspace, provider.configured]);
 
   const blocked = current.tasks.some(task => task.status === 'review' || task.status === 'failed');
@@ -92,8 +104,9 @@ export default function App() {
     setBusy(true);
     setError('');
     try {
-      const result = await api<{ workspace: Workspace }>(path, data);
+      const result = await api<Snapshot>(path, data);
       setWorkspace(result.workspace);
+      setProjects(result.projects);
       return true;
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Request failed.');
@@ -111,8 +124,17 @@ export default function App() {
   }
 
   async function decision(task: Task, value: 'approve' | 'revise') {
-    const success = await mutate(`/api/tasks/${task.id}/decision`, { decision: value, feedback: feedback[task.id] || '' });
+    const success = await mutate(`/api/tasks/${task.id}/decision`, { projectId: workspace?.id, decision: value, feedback: feedback[task.id] || '' });
     if (success) setFeedback(previous => ({ ...previous, [task.id]: '' }));
+  }
+
+  async function selectProject(id: string) {
+    if (busy || id === workspace?.id) return;
+    setAuto(false);
+    if (await mutate(`/api/projects/${id}/select`, {})) {
+      setSelected('lead');
+      setFeedback({});
+    }
   }
 
   const selectedAgent = agents.find(agent => agent.id === selected)!;
@@ -129,6 +151,9 @@ export default function App() {
           <button className={`nav-item ${view === 'activity' ? 'active' : ''}`} onClick={() => setView('activity')}><span className="nav-glyph">≋</span> Activity log <span className="nav-count">{current.activity.length}</span></button>
         </nav>
         <div className="sidebar-divider" />
+        <div className="side-label side-label-team">PROJECTS <span>{String(projects.length).padStart(2, '0')}</span></div>
+        <div className="project-list" aria-label="Saved projects">{projects.map(project => <button key={project.id} className={`project-row ${project.id === workspace?.id ? 'project-row-selected' : ''}`} title={project.brief} onClick={() => void selectProject(project.id)} disabled={busy}><span className="project-icon">▤</span><span className="project-meta"><strong>{project.brief}</strong><small>{project.completed}/{project.total} complete</small></span></button>)}{!projects.length && <span className="empty-projects">Your projects will appear here.</span>}</div>
+        <div className="sidebar-divider" />
         <div className="side-label side-label-team">YOUR TEAM <span>04</span></div>
         <div className="side-team">{agents.map(agent => <button key={agent.id} className={`team-row ${selected === agent.id ? 'team-row-selected' : ''}`} onClick={() => setSelected(agent.id)}>
           <AgentAvatar id={agent.id} /><span className="team-name">{agent.name}<small>{agent.role}</small></span>
@@ -138,7 +163,7 @@ export default function App() {
       </aside>
 
       <main className="main-content">
-        <header className="topbar"><span className="breadcrumb">Workspace <span>/</span> {view === 'board' ? 'Overview' : 'Activity'}</span><div className="top-right"><span className="top-live"><span className="pulse" /> LOCAL WORKSPACE</span><span className="top-avatar">DB</span></div></header>
+        <header className="topbar"><span className="breadcrumb">Workspace <span>/</span> {view === 'board' ? 'Overview' : 'Activity'}</span><div className="top-right"><label className="sr-only" htmlFor="mobile-project">Select project</label><select id="mobile-project" className="mobile-project-select" value={workspace?.id || ''} onChange={event => void selectProject(event.target.value)} disabled={busy || !projects.length}><option value="" disabled>Projects</option>{projects.map(project => <option key={project.id} value={project.id}>{project.brief}</option>)}</select><span className="top-live"><span className="pulse" /> LOCAL WORKSPACE</span><span className="top-avatar">DB</span></div></header>
         <div className="content-inner">
           <div className="heading-row"><div><p className="eyebrow">YOUR COMMAND CENTER <span className="eyebrow-rule" /></p><h1>Where ideas <em>take shape.</em></h1><p className="intro">Give your team a direction. Review the written work each agent delivers.</p></div><span className="project-number">PROJECT / LOCAL <span>↗</span></span></div>
           {error && <div className="notice error" role="alert">{error}</div>}
@@ -149,12 +174,12 @@ export default function App() {
             <aside className="inspector"><div className="inspector-heading"><span>AGENT INSPECTOR</span><span className="inspector-id">0{agents.findIndex(agent => agent.id === selected) + 1} / 04</span></div><div className="inspector-identity"><span className="inspector-avatar" style={{ '--avatar-color': selectedAgent.color } as CSSProperties}>{selectedAgent.initials}</span><div><h2>{selectedAgent.name}</h2><span>{selectedAgent.role}</span></div></div><div className="inspector-meta"><span>CURRENT STATUS</span><strong><span className="pulse" /> {selectedTask?.status ?? 'Standing by'}</strong></div><div className="inspector-section"><span className="section-kicker">ASSIGNMENT</span><p>{selectedTask?.description ?? 'Create a project brief to assign work.'}</p></div><div className="inspector-section recent"><span className="section-kicker">LATEST UPDATE</span><p>{recent?.message ?? 'Waiting for a task to begin.'}</p></div><div className="inspector-foot">{selectedTask?.output ? 'DELIVERABLE ON TASK BOARD' : 'SELECT AN AGENT IN THE OFFICE'} <span>↗</span></div></aside>
           </div>
 
-          <section className="brief-card"><div className="brief-heading"><span className="brief-asterisk">✳</span><div><h2>Start with a brief</h2><p>Describe what you want your team to explore.</p></div></div><form onSubmit={submit} className="brief-form"><label className="sr-only" htmlFor="brief">Project brief</label><input id="brief" value={brief} onChange={event => setBrief(event.target.value)} placeholder="e.g. Plan a launch campaign for a new product..." maxLength={500} /><button type="submit" disabled={!brief.trim() || busy}>Start project <Icon name="arrow" /></button></form><div className="brief-note"><strong>Current brief:</strong> {current.brief || 'No project yet.'} <span>· A new brief replaces the saved local project.</span></div></section>
+          <section className="brief-card"><div className="brief-heading"><span className="brief-asterisk">✳</span><div><h2>Start with a brief</h2><p>Describe what you want your team to explore.</p></div></div><form onSubmit={submit} className="brief-form"><label className="sr-only" htmlFor="brief">Project brief</label><input id="brief" value={brief} onChange={event => setBrief(event.target.value)} placeholder="e.g. Plan a launch campaign for a new product..." maxLength={500} /><button type="submit" disabled={!brief.trim() || busy}>Start project <Icon name="arrow" /></button></form><div className="brief-note"><strong>Current brief:</strong> {current.brief || 'No project yet.'} <span>· A new brief creates another saved project.</span></div></section>
 
           <section className="progress-section"><div className="section-head"><div><p className="eyebrow">THE PROCESS</p><h2>{view === 'board' ? 'Work in motion' : 'Recent activity'}</h2></div><div className="section-actions"><span>{done} OF {current.tasks.length} COMPLETE</span><button onClick={() => void runStep()} disabled={!workspace || !provider.configured || busy || blocked || allDone || auto} title="Run one AI task"><Icon name="step" /> Step</button><button className="run-button" onClick={() => setAuto(value => !value)} disabled={!workspace || !provider.configured || blocked || allDone}><Icon name={auto ? 'pause' : 'play'} /> {auto ? 'Pause after task' : 'Run team'}</button></div></div>
-            {view === 'board' ? <div className="task-board">{columns.filter(column => column.status !== 'failed' || current.tasks.some(task => task.status === 'failed')).map(column => <div key={column.status} className="task-column"><div className="column-heading"><span className={`column-indicator ${column.status}`} /> {column.label} <span className="column-count">{current.tasks.filter(task => task.status === column.status).length}</span></div><div className="column-body">{current.tasks.filter(task => task.status === column.status).map(task => <div className="task-card" key={task.id}><span className="task-id">TASK 0{task.id}</span><h3>{task.title}</h3><p>{task.description}</p><div className="task-owner"><AgentAvatar id={task.owner} small />{agents.find(agent => agent.id === task.owner)?.name}{task.requiresApproval && <span className="approval-symbol" title="Approval required">✳</span>}</div>{task.output && <details className="task-output" open={task.status === 'review'}><summary>Read {task.feedback ? 'previous draft' : 'deliverable'}</summary><pre>{task.output}</pre></details>}{task.error && <p className="task-error" role="alert">{task.error}</p>}{task.status === 'review' && <div className="review-actions"><label className="sr-only" htmlFor={`feedback-${task.id}`}>Revision feedback</label><textarea id={`feedback-${task.id}`} value={feedback[task.id] || ''} onChange={event => setFeedback(previous => ({ ...previous, [task.id]: event.target.value }))} maxLength={1000} placeholder="What should change? Required to revise." disabled={busy} /><button onClick={() => void decision(task, 'revise')} disabled={busy || !feedback[task.id]?.trim()}>Revise</button><button onClick={() => void decision(task, 'approve')} disabled={busy}>Approve</button></div>}{task.status === 'failed' && <button className="retry-button" onClick={() => void mutate(`/api/tasks/${task.id}/retry`, {})} disabled={busy}>Retry task</button>}</div>)}{!current.tasks.some(task => task.status === column.status) && <div className="empty-column">Nothing here yet</div>}</div></div>)}</div> : <div className="activity-list">{current.activity.map(entry => <div className="activity-row" key={entry.id}><AgentAvatar id={entry.agent} small /><span><strong>{agents.find(agent => agent.id === entry.agent)?.name}</strong> {entry.message}</span><time>{new Date(entry.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</time></div>)}{!current.activity.length && <div className="empty-column">No activity yet. Create a brief to begin.</div>}</div>}
+            {view === 'board' ? <div className="task-board">{columns.filter(column => column.status !== 'failed' || current.tasks.some(task => task.status === 'failed')).map(column => <div key={column.status} className="task-column"><div className="column-heading"><span className={`column-indicator ${column.status}`} /> {column.label} <span className="column-count">{current.tasks.filter(task => task.status === column.status).length}</span></div><div className="column-body">{current.tasks.filter(task => task.status === column.status).map(task => <div className="task-card" key={task.id}><span className="task-id">TASK 0{task.id}</span><h3>{task.title}</h3><p>{task.description}</p><div className="task-owner"><AgentAvatar id={task.owner} small />{agents.find(agent => agent.id === task.owner)?.name}{task.requiresApproval && <span className="approval-symbol" title="Approval required">✳</span>}</div>{task.output && <details className="task-output" open={task.status === 'review'}><summary>Read {task.feedback ? 'previous draft' : 'deliverable'}</summary><pre>{task.output}</pre></details>}{task.error && <p className="task-error" role="alert">{task.error}</p>}{task.status === 'review' && <div className="review-actions"><label className="sr-only" htmlFor={`feedback-${task.id}`}>Revision feedback</label><textarea id={`feedback-${task.id}`} value={feedback[task.id] || ''} onChange={event => setFeedback(previous => ({ ...previous, [task.id]: event.target.value }))} maxLength={1000} placeholder="What should change? Required to revise." disabled={busy} /><button onClick={() => void decision(task, 'revise')} disabled={busy || !feedback[task.id]?.trim()}>Revise</button><button onClick={() => void decision(task, 'approve')} disabled={busy}>Approve</button></div>}{task.status === 'failed' && <button className="retry-button" onClick={() => void mutate(`/api/tasks/${task.id}/retry`, { projectId: workspace?.id })} disabled={busy}>Retry task</button>}</div>)}{!current.tasks.some(task => task.status === column.status) && <div className="empty-column">Nothing here yet</div>}</div></div>)}</div> : <div className="activity-list">{current.activity.map(entry => <div className="activity-row" key={entry.id}><AgentAvatar id={entry.agent} small /><span><strong>{agents.find(agent => agent.id === entry.agent)?.name}</strong> {entry.message}</span><time>{new Date(entry.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</time></div>)}{!current.activity.length && <div className="empty-column">No activity yet. Create a brief to begin.</div>}</div>}
           </section>
-          <footer>RELAY OFFICE <span>·</span> WRITTEN AI DELIVERABLES <span className="footer-right">LOCAL / 0.2</span></footer>
+          <footer>RELAY OFFICE <span>·</span> WRITTEN AI DELIVERABLES <span className="footer-right">LOCAL / 0.3</span></footer>
         </div>
       </main>
     </div>

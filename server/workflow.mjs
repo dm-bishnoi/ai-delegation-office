@@ -12,6 +12,7 @@ export function makeWorkspace(brief) {
   if (!value || value.length > 500) throw new ClientError(400, 'Brief must be 1–500 characters.');
   return {
     id: randomUUID(), brief: value, nextId: 2,
+    createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
     tasks: [
       { id: 1, title: 'Shape the approach', description: 'Define scope and success criteria for the brief.', owner: 'lead', status: 'queued', requiresApproval: true },
       { id: 2, title: 'Sketch the experience', description: 'Outline screens, interaction, and visual direction.', owner: 'design', status: 'queued', requiresApproval: false },

@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { completeTask, decide, failTask, makeWorkspace, nextTask, retry } from './workflow.mjs';
 import { generate, providerEndpoint } from './provider.mjs';
-import { loadWorkspace, saveWorkspace } from './store.mjs';
+import { loadStore, projectSummaries, saveStore } from './store.mjs';
 
 test('approval gates block downstream tasks and revision sends feedback to the provider', async () => {
   const workspace = makeWorkspace('Launch a useful tool.');
@@ -33,14 +33,18 @@ test('approval gates block downstream tasks and revision sends feedback to the p
   assert.match(prompt, /Approved earlier work/);
 });
 
-test('failed tasks can be retried and an interrupted task recovers on restart', async () => {
+test('legacy workspace migrates without losing data and interrupted tasks become retryable', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'relay-office-'));
-  const path = join(dir, 'workspace.json');
+  const path = join(dir, 'projects.json');
+  const legacyPath = join(dir, 'workspace.json');
   try {
     const workspace = makeWorkspace('Plan a test.');
     const task = nextTask(workspace);
-    await saveWorkspace(workspace, path);
-    const restored = await loadWorkspace(path);
+    await writeFile(legacyPath, JSON.stringify(workspace));
+    const store = await loadStore(path, legacyPath);
+    const restored = store.projects[0];
+    assert.equal(store.activeProjectId, workspace.id);
+    assert.equal((await readFile(legacyPath, 'utf8')).length > 0, true);
     assert.equal(restored.tasks[0].status, 'failed');
     assert.match(restored.tasks[0].error, /Server stopped/);
     assert.throws(() => nextTask(restored), /Retry the failed/);
@@ -48,6 +52,14 @@ test('failed tasks can be retried and an interrupted task recovers on restart', 
     const retried = nextTask(restored);
     failTask(restored, retried, 'Provider error');
     assert.equal(retried.status, 'failed');
+    const second = makeWorkspace('A second project.');
+    store.projects.push(second);
+    store.activeProjectId = second.id;
+    await saveStore(store, path);
+    const loaded = await loadStore(path, legacyPath);
+    assert.equal(loaded.projects.length, 2);
+    assert.equal(loaded.projects[0].tasks[0].status, 'failed');
+    assert.equal(projectSummaries(loaded).length, 2);
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
 
