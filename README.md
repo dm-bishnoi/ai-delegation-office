@@ -1,6 +1,6 @@
 # Relay Office
 
-An original 3D office for a four-agent, human-reviewed project workflow. **This version generates real written deliverables** through a configured OpenAI-compatible Chat Completions endpoint. It still uses simple code-generated characters and does not give agents browser, terminal, or other tool access.
+An original 3D office for a four-agent, human-reviewed project workflow. The four tasks produce written plans. After approving all four, you can also generate a **single-file website prototype** using the configured OpenAI-compatible provider. Agents do not have browser, terminal, or other tool access.
 
 ## Local setup
 
@@ -35,10 +35,11 @@ Visit Vite's displayed URL. The script runs the browser UI and the local Node AP
 2. Press **Step** for one AI response or **Run team** to continue automatically. The next agent sees approved earlier deliverables as context.
 3. Nova's strategy and Echo's final review stop for human approval. Read the deliverable, approve it, or enter specific revision feedback. Revision reruns that assignment.
 4. Provider errors leave the assignment in **Needs attention** with a retry button. Projects and activity history are saved in `data/projects.json` and restored after a restart. Existing `data/workspace.json` data from v0.2 is imported automatically and kept as a backup. An interrupted in-flight task becomes retryable.
+5. In **Project deliverables**, open each task's **Read deliverable** to see the plan. Once all four tasks are approved, click **Generate website prototype**. This makes one `index.html` containing HTML, CSS, and optional JavaScript. Use **Preview website**, **View source code**, or **Download code**. A project already completed on v0.3 can generate its prototype without rerunning the four tasks.
 
 In the 3D scene, drag to orbit and scroll to zoom. Agents move to their desks when generating a task and to the shared review table while awaiting approval. Their floor rings show active, review, and failed states. You can always select an agent from the sidebar if WebGL is unavailable.
 
-The model is asked for written plans, design outlines, implementation plans, and a review checklist. It does **not** execute code, browse websites, create files, or independently verify its claims. Treat generated content as a draft requiring human review. Run/pause controls do not cancel an in-flight provider request; pause takes effect after it returns.
+The model produces written plans and, on explicit request, HTML source for a standalone website prototype. The prototype is saved inside `data/projects.json` along with the project; no website directory is created until you download `index.html` from the browser. The model does **not** run the generated code, browse websites, test the result, or deploy it. Preview runs in a sandboxed iframe, and downloaded source requires your review before publication. Run/pause controls do not cancel an in-flight provider request; pause takes effect after it returns.
 
 ## Verification
 
@@ -47,7 +48,7 @@ npm test
 npm run build
 ```
 
-Tests exercise approvals, revision context, project migration, failed-task recovery, and provider URL validation with a mocked response. A real provider call requires your own credentials and has not been validated by CI.
+Tests exercise approvals, revision context, project migration, failed-task recovery, provider URL validation, and website artifact persistence with mocked responses. A real provider call requires your own credentials and has not been validated by CI. Some free models may not allow enough output tokens for a complete website; the app reports an error and lets you retry without losing existing plans.
 
 ## Scope and security
 
