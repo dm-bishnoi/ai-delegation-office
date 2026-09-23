@@ -4,7 +4,7 @@ import ProviderSettings from './ProviderSettings';
 import { agents, type AgentId, type ProjectSummary, type Task, type TaskStatus, type Workspace } from './workflow';
 
 type Provider = { configured: boolean; model: string | null; name?: string };
-type Operation = { type: 'website' | 'task'; projectId: string; model?: string; attempt?: number; total?: number; phase?: 'running' | 'waiting'; delayMs?: number } | null;
+type Operation = { type: 'website' | 'task'; projectId: string; model?: string; attempt?: number; total?: number; phase?: 'running' | 'waiting'; delayMs?: number; readyAt?: number | null; deadlineAt?: number | null; stage?: string; stageNumber?: number; stageTotal?: number } | null;
 type Snapshot = { workspace: Workspace | null; projects: ProjectSummary[]; provider: Provider; busy: boolean; operation: Operation };
 const empty: Workspace = { brief: '', tasks: [], activity: [], running: false, nextId: 1 };
 const columns: { status: TaskStatus; label: string }[] = [
@@ -42,6 +42,7 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [operation, setOperation] = useState<Operation>(null);
+  const [now, setNow] = useState(() => Date.now());
   const [auto, setAuto] = useState(false);
   const [error, setError] = useState('');
   const [brief, setBrief] = useState('');
@@ -50,6 +51,12 @@ export default function App() {
   const [view, setView] = useState<'board' | 'activity' | 'providers'>('board');
   const [showPreview, setShowPreview] = useState(false);
   const current = workspace ?? empty;
+  useEffect(() => {
+    if (!operation || !['waiting', 'running'].includes(operation.phase || '')) return;
+    setNow(Date.now());
+    const ticker = window.setInterval(() => setNow(Date.now()), 250);
+    return () => window.clearInterval(ticker);
+  }, [operation?.phase, operation?.readyAt, operation?.deadlineAt]);
 
   useEffect(() => {
     let cancelled = false;
@@ -82,6 +89,7 @@ export default function App() {
         if (!finished && snapshot.workspace?.id === workspace.id) {
           setWorkspace(snapshot.workspace);
           setProjects(snapshot.projects);
+          setOperation(snapshot.operation);
         }
       }).catch(() => { /* The task request reports the connection error. */ });
     }, 450);
@@ -94,7 +102,7 @@ export default function App() {
     } catch (cause) {
       setAuto(false);
       setError(cause instanceof Error ? cause.message : 'Could not run this task.');
-    } finally { finished = true; window.clearInterval(poll); setBusy(false); }
+    } finally { finished = true; window.clearInterval(poll); setOperation(null); setBusy(false); }
   }, [busy, workspace, provider.configured]);
 
   const blocked = current.tasks.some(task => task.status === 'review' || task.status === 'failed');
@@ -127,11 +135,24 @@ export default function App() {
     let finished = false;
     const poll = window.setInterval(() => {
       void api<Snapshot>('/api/workspace').then(snapshot => {
-        if (!finished && snapshot.workspace?.id === workspace.id) setOperation(snapshot.operation);
+        if (!finished && snapshot.workspace?.id === workspace.id) {
+          setWorkspace(snapshot.workspace);
+          setProjects(snapshot.projects);
+          setOperation(snapshot.operation);
+        }
       }).catch(() => { /* The build request reports connection errors. */ });
     }, 800);
     try { await mutate('/api/website', { projectId: workspace.id }); }
-    finally { finished = true; window.clearInterval(poll); setOperation(null); }
+    finally {
+      finished = true;
+      window.clearInterval(poll);
+      setOperation(null);
+      try {
+        const snapshot = await api<Snapshot>('/api/workspace');
+        setWorkspace(snapshot.workspace);
+        setProjects(snapshot.projects);
+      } catch { /* The earlier request has already reported the error. */ }
+    }
   }
 
   async function submit(event: FormEvent<HTMLFormElement>) {
@@ -173,6 +194,8 @@ export default function App() {
   const recent = current.activity.find(entry => entry.agent === selected);
   const buildingWebsite = operation?.type === 'website' && operation.projectId === workspace?.id;
   const fallbackWaiting = buildingWebsite && operation?.phase === 'waiting';
+  const countdownTo = operation?.phase === 'waiting' ? operation.readyAt : operation?.deadlineAt;
+  const remainingSeconds = countdownTo ? Math.max(0, Math.ceil((countdownTo - now) / 1000)) : 0;
 
   return (
     <div className="app-shell">
@@ -186,7 +209,7 @@ export default function App() {
         </nav>
         <div className="sidebar-divider" />
         <div className="side-label side-label-team">PROJECTS <span>{String(projects.length).padStart(2, '0')}</span></div>
-        <div className="project-list" aria-label="Saved projects">{projects.map(project => <button key={project.id} className={`project-row ${project.id === workspace?.id ? 'project-row-selected' : ''}`} title={project.brief} onClick={() => void selectProject(project.id)} disabled={busy}><span className="project-icon">▤</span><span className="project-meta"><strong>{project.brief}</strong><small>{project.completed}/{project.total} complete</small></span></button>)}{!projects.length && <span className="empty-projects">Your projects will appear here.</span>}</div>
+        <div className="project-list" aria-label="Saved projects">{projects.map(project => <button key={project.id} className={`project-row ${project.id === workspace?.id ? 'project-row-selected' : ''}`} title={project.brief} onClick={() => void selectProject(project.id)} disabled={busy}><span className="project-icon">▤</span><span className="project-meta"><strong>{project.brief}</strong><small>{project.completed}/{project.total} complete{project.websiteStage ? ` · ${project.websiteStage}` : ''}</small></span></button>)}{!projects.length && <span className="empty-projects">Your projects will appear here.</span>}</div>
         <div className="sidebar-divider" />
         <div className="side-label side-label-team">YOUR TEAM <span>04</span></div>
         <div className="side-team">{agents.map(agent => <button key={agent.id} className={`team-row ${selected === agent.id ? 'team-row-selected' : ''}`} onClick={() => setSelected(agent.id)}>
@@ -205,6 +228,8 @@ export default function App() {
           }} /> : <>
           <div className="heading-row"><div><p className="eyebrow">YOUR COMMAND CENTER <span className="eyebrow-rule" /></p><h1>Where ideas <em>take shape.</em></h1><p className="intro">Give your team a direction. Review the written work each agent delivers.</p></div><span className="project-number">PROJECT / LOCAL <span>↗</span></span></div>
           {error && <div className="notice error" role="alert">{error}</div>}
+          {operation?.phase === 'waiting' && <div className="notice" role="status">Switching to {operation.model} in {remainingSeconds}s · attempt {operation.attempt}/{operation.total}{operation.stageNumber ? ` · website stage ${operation.stageNumber}/${operation.stageTotal}` : ''}. Saved progress stays with this project.</div>}
+          {operation?.phase === 'running' && operation.projectId === workspace?.id && <div className="notice" role="status">Using {operation.model} · attempt {operation.attempt}/{operation.total}{operation.stageNumber ? ` · website stage ${operation.stageNumber}/${operation.stageTotal}` : ''} · timeout in {remainingSeconds}s. Completed stages are saved.</div>}
           {!provider.configured && !loading && <div className="notice" role="status">Open <strong>AI connections</strong> in the sidebar to connect a model. You can create a brief now.</div>}
 
           <div className="workspace-grid">
@@ -220,11 +245,13 @@ export default function App() {
           {workspace && <section className="deliverable-section" aria-labelledby="deliverable-title">
             <div className="deliverable-head"><div><p className="eyebrow">YOUR OUTPUT</p><h2 id="deliverable-title">Project deliverables</h2></div><span>{workspace.artifact ? 'WEBSITE FILE READY' : allDone ? 'PLANS READY · WEBSITE NOT BUILT' : 'WORK IN PROGRESS'}</span></div>
             <p>The four task cards above contain your team's written plans and review. Open each <strong>Read deliverable</strong> to see what was produced. {workspace.artifact ? 'Your website prototype is saved with this local project.' : 'Completing these tasks does not create website code. Generate a prototype after all four are approved.'}</p>
-            {allDone && !workspace.artifact && <button className="artifact-button" disabled={busy || !provider.configured} onClick={() => void buildWebsite()}>{fallbackWaiting ? 'Waiting for free model…' : buildingWebsite ? `Building website${operation?.attempt && operation.attempt > 1 ? ` · model ${operation.attempt}/${operation.total}` : ''}…` : 'Generate website prototype'}</button>}
+            {workspace.websiteDraft?.body && !workspace.artifact && <div className="draft-progress"><strong>Website page saved · stage 1 of 2</strong><p>Page content is saved with this project. Select this project later to continue with styling; your approved plans stay saved.</p><iframe title="Saved website draft" className="artifact-preview" sandbox="" referrerPolicy="no-referrer" srcDoc={`<!doctype html><html><head><meta charset="utf-8"><style>${workspace.websiteDraft.css || 'body{font-family:system-ui;margin:2rem;line-height:1.5}'}</style></head><body>${workspace.websiteDraft.body}</body></html>`} /><details><summary>View saved page HTML</summary><pre>{workspace.websiteDraft.body}</pre></details></div>}
+            {workspace.websiteError && !error && !workspace.artifact && <p className="draft-error" role="alert">Last website attempt: {workspace.websiteError}</p>}
+            {allDone && !workspace.artifact && <button className="artifact-button" disabled={busy || !provider.configured} onClick={() => void buildWebsite()}>{fallbackWaiting ? `Next model in ${remainingSeconds}s…` : buildingWebsite ? `Building ${operation?.stage === 'css' ? 'styles' : 'page'} · stage ${operation?.stageNumber || 1}/2…` : workspace.websiteDraft?.body ? 'Continue website from saved page' : 'Generate website prototype'}</button>}
             {workspace.artifact && <div className="artifact-result"><div className="artifact-toolbar"><strong>index.html</strong><div><button onClick={() => setShowPreview(value => !value)}>{showPreview ? 'Hide preview' : 'Preview website'}</button><button onClick={downloadWebsite}>Download code</button></div></div><p>One self-contained HTML file with CSS and optional JavaScript. {workspace.artifact.model && <>Generated with {workspace.artifact.model} (attempt {workspace.artifact.attempts}). </>}Open the downloaded file in a browser or edit it in VS Code. This is an AI-generated draft; review the code before publishing it.</p>{showPreview && <iframe title="Website prototype preview" className="artifact-preview" sandbox="allow-scripts" referrerPolicy="no-referrer" srcDoc={workspace.artifact.content} />}<details className="artifact-source"><summary>View source code</summary><pre>{workspace.artifact.content}</pre></details></div>}
           </section>}
           </>}
-          <footer>RELAY OFFICE <span>·</span> WRITTEN PLANS &amp; WEBSITE PROTOTYPE <span className="footer-right">LOCAL / 0.6.3</span></footer>
+          <footer>RELAY OFFICE <span>·</span> WRITTEN PLANS &amp; WEBSITE PROTOTYPE <span className="footer-right">LOCAL / 0.7.0</span></footer>
         </div>
       </main>
     </div>

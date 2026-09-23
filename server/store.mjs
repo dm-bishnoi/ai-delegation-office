@@ -66,6 +66,7 @@ export function projectSummaries(store) {
     .map(project => ({
       id: project.id, brief: project.brief, updatedAt: project.updatedAt || project.createdAt || '',
       completed: project.tasks.filter(task => task.status === 'done').length, total: project.tasks.length,
+      websiteStage: project.artifact ? 'ready' : project.websiteDraft?.body ? 'page saved' : null,
     }))
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 }
