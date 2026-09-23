@@ -121,6 +121,7 @@ h1 em { color: #d8b989; font-family: Georgia, serif; font-weight: 400; letter-sp
 .task-board { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 11px; }
 .notice { border: 1px solid #8d7d5e; border-radius: 7px; background: #292a25; color: #e2d7bc; padding: 13px 16px; font-size: 11px; line-height: 1.6; margin: -14px 0 20px; }
 .notice.error { border-color: #b57e74; background: #322522; color: #f0c7bd; }
+.notice-retry { display: inline-block; margin: 8px 0 0 12px; padding: 6px 10px; border: 1px solid #e9bbae; border-radius: 4px; color: #301f1b; background: #e9bbae; font-size: 11px; font-weight: 700; }
 .notice code { color: #f4d9a8; }
 .column-indicator.failed { background: #cd897d; }
 .task-output { margin-top: 12px; border-top: 1px solid #394648; padding-top: 10px; }

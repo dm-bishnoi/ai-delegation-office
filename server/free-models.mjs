@@ -34,7 +34,10 @@ export async function freeFallbackModels({ env, fetchImpl, minOutputTokens, excl
   catch { throw new Error('OpenRouter free-model catalog returned invalid JSON.'); }
   if (!Array.isArray(payload?.data)) throw new Error('OpenRouter free-model catalog returned no model list.');
   const eligible = eligibleFreeModels(payload.data, minOutputTokens, excluded).slice(0, 2);
-  return eligible.map(id => ({ id, maxTokens: Number(payload.data.find(model => model.id === id).top_provider?.max_completion_tokens) || 1200 }));
+  const models = eligible.map(id => ({ id, maxTokens: Number(payload.data.find(model => model.id === id).top_provider?.max_completion_tokens) || 1200 }));
+  // OpenRouter documents this route as free-only. Use it when the catalog cannot name enough suitable models.
+  if (minOutputTokens <= 1200) while (models.length < 2) models.push({ id: 'openrouter/free', maxTokens: 1200 });
+  return models;
 }
 
 export async function withFreeFallback(run, { env, fetchImpl, initialTokens, fallbackTokens = initialTokens,
@@ -47,8 +50,12 @@ export async function withFreeFallback(run, { env, fetchImpl, initialTokens, fal
     if (!firstError.retryable || !isOpenRouter(env.AI_BASE_URL?.trim()) || env.AI_FREE_FALLBACK?.trim().toLowerCase() === 'false') throw firstError;
     let models;
     try { models = await freeFallbackModels({ env, fetchImpl, minOutputTokens: minimumFallbackTokens, excluded: [firstModel] }); }
-    catch (error) { throw new Error(`${firstError.message} ${error.message}`); }
-    if (!models.length) throw new Error(`${firstError.message} No zero-price free text fallback is available for a ${minimumFallbackTokens}-token request. Choose another model in AI connections or retry later.`);
+    catch (error) {
+      if (minimumFallbackTokens > 1200) throw new Error(`${firstError.message} ${error.message}`);
+      // When catalog discovery fails, the provider's own free-only router can still try available models.
+      models = [{ id: 'openrouter/free', maxTokens: 1200 }, { id: 'openrouter/free', maxTokens: 1200 }];
+    }
+    if (!models.length) throw new Error(`${firstError.message} No free fallback is available for a ${minimumFallbackTokens}-token request. Choose another model in AI connections or retry later.`);
     let lastError = firstError;
     for (const [index, { id: model, maxTokens }] of models.entries()) {
       const attempt = index + 2;
