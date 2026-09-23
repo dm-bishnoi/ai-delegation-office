@@ -77,6 +77,8 @@ test('website generation requires an approved project, validates full HTML, and 
   const fetchImpl = async (_url, options) => {
     const payload = JSON.parse(options.body);
     assert.equal(payload.max_tokens, 5500);
+    assert.equal(payload.stream, false);
+    assert.equal(options.headers.Accept, 'application/json');
     assert.match(payload.messages[1].content, /portfolio website/i);
     return { ok: true, json: async () => ({ choices: [{ message: { content: html }, finish_reason: 'stop' }] }) };
   };
@@ -93,4 +95,21 @@ test('website generation requires an approved project, validates full HTML, and 
     await assert.rejects(generateWebsite(workspace, { env, fetchImpl: async () => ({ ok: true, json: async () => ({ choices: [{ message: { content: html }, finish_reason: 'length' }] }) }) }), /truncated/);
     await assert.rejects(generateWebsite(workspace, { env, fetchImpl: async () => ({ ok: true, json: async () => ({ choices: [{ message: { content: '<h1>partial</h1>' }, finish_reason: 'stop' }] }) }) }), /complete standalone/);
   } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test('provider explains invalid response types without exposing their body', async () => {
+  const workspace = makeWorkspace('A small portfolio website');
+  for (const task of workspace.tasks) { task.status = 'done'; task.output = 'Approved plan.'; }
+  const env = { AI_BASE_URL: 'http://127.0.0.1:9999/v1', AI_API_KEY: 'test-key', AI_MODEL: 'test-model' };
+  const broken = (contentType, json, status = 200) => ({
+    ok: status === 200, status, headers: { get: () => contentType }, json,
+  });
+  await assert.rejects(generateWebsite(workspace, { env, fetchImpl: async () => broken('text/html', async () => { throw Error('secret body'); }) }), /HTML page instead of JSON/);
+  await assert.rejects(generateWebsite(workspace, { env, fetchImpl: async () => broken('text/event-stream', async () => { throw Error('secret body'); }) }), /streaming response/);
+  await assert.rejects(generateWebsite(workspace, { env, fetchImpl: async () => broken('application/json', async () => { throw Error('secret body'); }) }), error => {
+    assert.match(error.message, /malformed JSON/);
+    assert.doesNotMatch(error.message, /secret body/);
+    return true;
+  });
+  await assert.rejects(generateWebsite(workspace, { env, fetchImpl: async () => broken('application/json', async () => ({}), 429) }), /Rate limit or quota/);
 });
