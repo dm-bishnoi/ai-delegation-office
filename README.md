@@ -11,7 +11,7 @@ npm ci
 cp .env.example .env
 ```
 
-Edit `.env` on your machine:
+You can connect a provider directly from **AI connections** in the sidebar; this setup is optional. Alternatively, edit `.env` on your machine:
 
 ```dotenv
 AI_BASE_URL=https://your-provider.example/v1
@@ -20,6 +20,14 @@ AI_API_KEY=your-private-key
 ```
 
 OpenRouter, a self-hosted OpenAI-compatible gateway, or another provider exposing `POST /chat/completions` with `choices[0].message.content` can work. Set `AI_BASE_URL` to the prefix **before** `/chat/completions`. For a local provider, `http://127.0.0.1` or `http://localhost` is accepted; remote providers must use HTTPS. Availability and model compatibility depend on your chosen provider. Never put a key in frontend code or commit `.env`.
+
+### Connect AI from the workspace
+
+1. Open **AI connections** and choose OpenRouter, OpenAI, Ollama, or an OpenAI-compatible endpoint. Enter its base URL, exact model ID, and API key (optional only for a local server). **Load model IDs** queries the provider's `/models` endpoint; if that endpoint is unavailable, enter the ID manually.
+2. Select **Save and select provider**, then **Test connection**. This sends one small real AI request and may consume quota. The selected provider handles subsequent tasks and website generation. Previous `.env` credentials appear as an optional Environment connection.
+3. To change models, add a new connection and select it. Removing the active connection returns to `.env` if configured. OpenRouter's verified free-model fallback only applies to OpenRouter; switching to a paid provider is always a manual choice.
+
+Connections are local to this workspace (there is no user account system). Keys are never included in API responses or project output. They are encrypted in gitignored `data/providers.json` using a randomly generated local `data/provider.key`. **Back up both files together** if you need to migrate connections. Anyone with access to the local application and its data files can use or recover those keys; do not expose the API beyond localhost. A missing encryption key cannot recover saved credentials; remove the lost connection and add it again. Model discovery lists IDs and does not verify Chat Completions support; use **Test connection** for that.
 
 Each Step or automatic task sends your brief and relevant prior deliverables to the selected provider. Calls may consume quota or incur charges under that provider's terms. With OpenRouter (`AI_BASE_URL=https://openrouter.ai/api/v1`), a transient error or truncated response triggers at most two extra requests, after 3 and 6 seconds. The server fetches OpenRouter's current model catalog and only chooses `:free` models with zero prompt, completion, and request prices and enough listed output capacity. It never selects an unverified or paid fallback. Each attempted request may count against free-tier limits. Set `AI_FREE_FALLBACK=false` in `.env` to disable this; other OpenAI-compatible providers keep the single-model behavior.
 
@@ -48,7 +56,7 @@ npm test
 npm run build
 ```
 
-Tests exercise approvals, revision context, project migration, failed-task recovery, provider URL validation, website artifact persistence, and bounded free-model fallback with mocked responses. A real provider call requires your own credentials and has not been validated by CI. Some free models may not allow enough output tokens for a complete website; after fallback attempts are exhausted, the app reports an error and lets you retry without losing existing plans.
+Tests exercise approvals, revision context, project migration, failed-task recovery, provider URL validation, local credential encryption, provider switching, website artifact persistence, and bounded free-model fallback with mocked responses. A real provider call requires your own credentials and has not been validated by CI. Some free models may not allow enough output tokens for a complete website; after fallback attempts are exhausted, the app reports an error and lets you retry without losing existing plans.
 
 If website generation reports an empty or malformed JSON response, the provider or gateway sent an invalid response even though the request asked for JSON. Try **Generate website prototype** again. If it repeats, check that `AI_BASE_URL` is the OpenAI-compatible API prefix (for OpenRouter, `https://openrouter.ai/api/v1`) and that `AI_MODEL` names a model that supports Chat Completions and sufficient output length. Responses labelled HTML or streaming now show a specific error. Failed generation keeps your four completed plans; it does not save a partial website. Do not share your API key when reporting an error.
 

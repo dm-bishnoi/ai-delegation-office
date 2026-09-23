@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useState, type CSSProperties, type FormEvent } from 'react';
 import OfficeScene from './OfficeScene';
+import ProviderSettings from './ProviderSettings';
 import { agents, type AgentId, type ProjectSummary, type Task, type TaskStatus, type Workspace } from './workflow';
 
-type Provider = { configured: boolean; model: string | null };
+type Provider = { configured: boolean; model: string | null; name?: string };
 type Operation = { type: 'website' | 'task'; projectId: string; model?: string; attempt?: number; total?: number; phase?: 'running' | 'waiting'; delayMs?: number } | null;
 type Snapshot = { workspace: Workspace | null; projects: ProjectSummary[]; provider: Provider; busy: boolean; operation: Operation };
 const empty: Workspace = { brief: '', tasks: [], activity: [], running: false, nextId: 1 };
@@ -46,7 +47,7 @@ export default function App() {
   const [brief, setBrief] = useState('');
   const [feedback, setFeedback] = useState<Record<number, string>>({});
   const [selected, setSelected] = useState<AgentId>('lead');
-  const [view, setView] = useState<'board' | 'activity'>('board');
+  const [view, setView] = useState<'board' | 'activity' | 'providers'>('board');
   const [showPreview, setShowPreview] = useState(false);
   const current = workspace ?? empty;
 
@@ -181,6 +182,7 @@ export default function App() {
         <nav className="side-nav" aria-label="Workspace navigation">
           <button className={`nav-item ${view === 'board' ? 'active' : ''}`} onClick={() => setView('board')}><span className="nav-glyph">◈</span> Task board <span className="nav-count">{current.tasks.length}</span></button>
           <button className={`nav-item ${view === 'activity' ? 'active' : ''}`} onClick={() => setView('activity')}><span className="nav-glyph">≋</span> Activity log <span className="nav-count">{current.activity.length}</span></button>
+          <button className={`nav-item ${view === 'providers' ? 'active' : ''}`} onClick={() => { setAuto(false); setView('providers'); }}><span className="nav-glyph">◎</span> AI connections <span className="nav-count">{provider.configured ? '●' : '○'}</span></button>
         </nav>
         <div className="sidebar-divider" />
         <div className="side-label side-label-team">PROJECTS <span>{String(projects.length).padStart(2, '0')}</span></div>
@@ -191,15 +193,19 @@ export default function App() {
           <AgentAvatar id={agent.id} /><span className="team-name">{agent.name}<small>{agent.role}</small></span>
           <span className={`status-dot ${current.tasks.some(task => task.owner === agent.id && task.status === 'active') || (agent.id === 'build' && buildingWebsite) ? 'busy' : ''}`} />
         </button>)}</div>
-        <div className="side-bottom"><span className="pulse" /> {provider.configured ? 'AI PROVIDER READY' : 'AI SETUP REQUIRED'}<small>{provider.configured ? provider.model : 'Configure the API in your local .env'}</small></div>
+        <div className="side-bottom"><span className="pulse" /> {provider.configured ? 'AI PROVIDER READY' : 'AI SETUP REQUIRED'}<small>{provider.configured ? `${provider.name} · ${provider.model}` : 'Open AI connections to set up'}</small></div>
       </aside>
 
       <main className="main-content">
-        <header className="topbar"><span className="breadcrumb">Workspace <span>/</span> {view === 'board' ? 'Overview' : 'Activity'}</span><div className="top-right"><label className="sr-only" htmlFor="mobile-project">Select project</label><select id="mobile-project" className="mobile-project-select" value={workspace?.id || ''} onChange={event => void selectProject(event.target.value)} disabled={busy || !projects.length}><option value="" disabled>Projects</option>{projects.map(project => <option key={project.id} value={project.id}>{project.brief}</option>)}</select><span className="top-live"><span className="pulse" /> LOCAL WORKSPACE</span><span className="top-avatar">DB</span></div></header>
+        <header className="topbar"><span className="breadcrumb">Workspace <span>/</span> {view === 'board' ? 'Overview' : view === 'activity' ? 'Activity' : 'AI connections'}</span><div className="top-right"><label className="sr-only" htmlFor="mobile-project">Select project</label><select id="mobile-project" className="mobile-project-select" value={workspace?.id || ''} onChange={event => void selectProject(event.target.value)} disabled={busy || !projects.length}><option value="" disabled>Projects</option>{projects.map(project => <option key={project.id} value={project.id}>{project.brief}</option>)}</select><span className="top-live"><span className="pulse" /> LOCAL WORKSPACE</span><span className="top-avatar">DB</span></div></header>
         <div className="content-inner">
+          {view === 'providers' ? <ProviderSettings busy={busy} onUpdate={async () => {
+            const snapshot = await api<Snapshot>('/api/workspace');
+            setProvider(snapshot.provider);
+          }} /> : <>
           <div className="heading-row"><div><p className="eyebrow">YOUR COMMAND CENTER <span className="eyebrow-rule" /></p><h1>Where ideas <em>take shape.</em></h1><p className="intro">Give your team a direction. Review the written work each agent delivers.</p></div><span className="project-number">PROJECT / LOCAL <span>↗</span></span></div>
           {error && <div className="notice error" role="alert">{error}</div>}
-          {!provider.configured && !loading && <div className="notice" role="status">AI execution needs a server-side provider key. Copy <code>.env.example</code> to <code>.env</code>, fill in your provider values, then restart the app. You can create a brief now.</div>}
+          {!provider.configured && !loading && <div className="notice" role="status">Open <strong>AI connections</strong> in the sidebar to connect a model. You can create a brief now.</div>}
 
           <div className="workspace-grid">
             <section className="scene-panel" aria-label="Interactive office preview"><div className="panel-top"><div><span className="live-icon">✦</span> THE OFFICE <span className="panel-sub">/ LIVE VIEW</span></div><span className="scene-badge"><span className="pulse" /> {buildingWebsite ? 'ATLAS BUILDING WEBSITE' : busy ? 'WORKING' : blocked ? 'ACTION NEEDED' : allDone ? 'COMPLETE' : 'TEAM READY'}</span></div><OfficeScene workspace={current} websiteBuilding={buildingWebsite} selected={selected} onSelect={setSelected} /><div className="scene-bottom"><span>CLICK AN AGENT TO INSPECT</span><span>ISOMETRIC VIEW <span className="corner-mark">⌗</span></span></div></section>
@@ -217,7 +223,8 @@ export default function App() {
             {allDone && !workspace.artifact && <button className="artifact-button" disabled={busy || !provider.configured} onClick={() => void buildWebsite()}>{fallbackWaiting ? 'Waiting for free model…' : buildingWebsite ? `Building website${operation?.attempt && operation.attempt > 1 ? ` · model ${operation.attempt}/${operation.total}` : ''}…` : 'Generate website prototype'}</button>}
             {workspace.artifact && <div className="artifact-result"><div className="artifact-toolbar"><strong>index.html</strong><div><button onClick={() => setShowPreview(value => !value)}>{showPreview ? 'Hide preview' : 'Preview website'}</button><button onClick={downloadWebsite}>Download code</button></div></div><p>One self-contained HTML file with CSS and optional JavaScript. {workspace.artifact.model && <>Generated with {workspace.artifact.model} (attempt {workspace.artifact.attempts}). </>}Open the downloaded file in a browser or edit it in VS Code. This is an AI-generated draft; review the code before publishing it.</p>{showPreview && <iframe title="Website prototype preview" className="artifact-preview" sandbox="allow-scripts" referrerPolicy="no-referrer" srcDoc={workspace.artifact.content} />}<details className="artifact-source"><summary>View source code</summary><pre>{workspace.artifact.content}</pre></details></div>}
           </section>}
-          <footer>RELAY OFFICE <span>·</span> WRITTEN PLANS &amp; WEBSITE PROTOTYPE <span className="footer-right">LOCAL / 0.5</span></footer>
+          </>}
+          <footer>RELAY OFFICE <span>·</span> WRITTEN PLANS &amp; WEBSITE PROTOTYPE <span className="footer-right">LOCAL / 0.6</span></footer>
         </div>
       </main>
     </div>
