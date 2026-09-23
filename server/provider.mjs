@@ -20,6 +20,7 @@ async function providerFailure(response) {
   const identifiers = [error?.code, error?.type, error?.metadata?.error_type];
   const exhausted = identifiers.some(code => typeof code === 'string' && quotaCodes.has(code));
   const reason = response.status === 401 || response.status === 403 ? 'Check AI_API_KEY and provider permissions.'
+    : response.status === 402 ? 'Provider credits are unavailable. Check your account balance or key spending limit.'
     : response.status === 404 ? 'Check AI_BASE_URL and AI_MODEL.'
     : response.status === 429 && exhausted ? 'API credits or account spending limit exhausted. Check provider billing and usage; retrying or switching models will not restore access.'
     : response.status === 429 ? 'Rate limit or quota reached. Check your provider usage and limits. If temporarily rate limited, wait before retrying.'
@@ -36,6 +37,11 @@ export function providerInfo(env = process.env) {
   return { configured: Boolean(base && model && key && key !== 'your-key-here' && model !== 'your-provider-model-id'), model: model || null };
 }
 
+export async function testConnection({ env = process.env, fetchImpl = fetch } = {}) {
+  await completion('Answer in one word.', 'Reply OK.', { env, fetchImpl, model: env.AI_MODEL?.trim(), maxTokens: 16 });
+  return { status: 'connected', model: env.AI_MODEL.trim() };
+}
+
 export function providerEndpoint(base) {
   let url;
   try { url = new URL(`${base.replace(/\/+$/, '')}/chat/completions`); }
@@ -45,6 +51,26 @@ export function providerEndpoint(base) {
     throw new Error('AI_BASE_URL must use HTTPS, except for a local provider.');
   }
   return url;
+}
+
+export async function listModels({ baseUrl, apiKey = '', fetchImpl = fetch }) {
+  const endpoint = providerEndpoint(baseUrl);
+  if (endpoint.username || endpoint.password || endpoint.search || endpoint.hash) throw new Error('API URL must not contain credentials or query parameters.');
+  const local = ['localhost', '127.0.0.1', '[::1]'].includes(endpoint.hostname);
+  if (!local && !apiKey.trim()) throw new Error('Enter an API key to load models.');
+  const url = new URL(`${baseUrl.replace(/\/+$/, '')}/models`);
+  let response;
+  try { response = await fetchImpl(url, { headers: { Accept: 'application/json',
+    ...(apiKey.trim() ? { Authorization: `Bearer ${apiKey.trim()}` } : {}) },
+    signal: AbortSignal.timeout(10000), redirect: 'error' }); }
+  catch { throw new Error('Could not load the model list. Enter a model ID manually.'); }
+  if (!response.ok) throw new Error(`Model list returned HTTP ${response.status}. Enter a model ID manually.`);
+  let payload;
+  try { payload = await response.json(); }
+  catch { throw new Error('Model list was not JSON. Enter a model ID manually.'); }
+  if (!Array.isArray(payload?.data)) throw new Error('Provider does not expose a model list. Enter a model ID manually.');
+  return payload.data.map(item => item?.id).filter(id => typeof id === 'string' && id.length <= 160)
+    .sort((a, b) => Number(b.endsWith(':free')) - Number(a.endsWith(':free')) || a.localeCompare(b)).slice(0, 300);
 }
 
 export async function generate(workspace, task, { env = process.env, fetchImpl = fetch, onAttempt, sleepImpl } = {}) {
@@ -71,9 +97,11 @@ async function completion(system, prompt, { env, fetchImpl, model, maxTokens }) 
   try {
     response = await fetchImpl(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', Accept: 'application/json', Authorization: `Bearer ${env.AI_API_KEY.trim()}` },
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json',
+        ...(env.AI_LOCAL_NO_KEY === 'true' ? {} : { Authorization: `Bearer ${env.AI_API_KEY.trim()}` }) },
       body: JSON.stringify({ model, messages: [{ role: 'system', content: system }, { role: 'user', content: prompt }], temperature: 0.3, max_tokens: maxTokens, stream: false }),
       signal: AbortSignal.timeout(maxTokens > 1200 ? 120000 : 60000),
+      redirect: 'error',
     });
   } catch (error) {
     throw providerError(error?.name === 'TimeoutError' ? 'AI request timed out.' : 'Could not reach the configured AI provider.', true);

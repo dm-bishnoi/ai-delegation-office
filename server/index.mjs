@@ -4,13 +4,16 @@ import { readFile, stat } from 'node:fs/promises';
 import { extname, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ClientError, completeTask, decide, failTask, makeWorkspace, nextTask, retry } from './workflow.mjs';
-import { generate, generateWebsite, providerInfo } from './provider.mjs';
+import { generate, generateWebsite, listModels, testConnection } from './provider.mjs';
+import { activeProviderEnv, activeProviderInfo, loadProviderSettings, publicProviderSettings,
+  removeProvider, saveProvider, saveProviderSettings, selectProvider } from './provider-settings.mjs';
 import { loadStore, projectSummaries, saveStore } from './store.mjs';
 
 const port = Number(process.env.API_PORT || 3001);
 if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('API_PORT must be a valid port.');
 const dist = resolve(fileURLToPath(new URL('../dist/', import.meta.url)));
 let catalog = await loadStore();
+let providerSettings = await loadProviderSettings();
 let busy = false;
 let operation = null;
 
@@ -19,7 +22,7 @@ function activeProject() {
 }
 
 function snapshot() {
-  return { workspace: activeProject(), projects: projectSummaries(catalog), provider: providerInfo(), busy, operation };
+  return { workspace: activeProject(), projects: projectSummaries(catalog), provider: activeProviderInfo(providerSettings), busy, operation };
 }
 
 function requireActive(projectId) {
@@ -69,12 +72,48 @@ const server = createServer(async (req, res) => {
     const { pathname } = new URL(req.url, 'http://localhost');
     if (!pathname.startsWith('/api/')) return await serveStatic(pathname, res);
     if (req.method === 'GET' && pathname === '/api/workspace') return json(res, 200, snapshot());
+    if (req.method === 'GET' && pathname === '/api/providers') return json(res, 200, publicProviderSettings(providerSettings));
     if (req.method !== 'POST') return json(res, 405, { error: 'Method not allowed.' });
+    if (req.headers.origin) {
+      let origin;
+      try { origin = new URL(req.headers.origin); } catch { throw new ClientError(403, 'Invalid request origin.'); }
+      if (origin.protocol !== 'http:' || !['localhost', '127.0.0.1', '[::1]'].includes(origin.hostname)) throw new ClientError(403, 'Invalid request origin.');
+    }
     if (busy) throw new ClientError(409, 'An AI task is still running.');
     const body = await readJson(req);
     if (busy) throw new ClientError(409, 'An AI task is still running.');
     busy = true;
     try {
+      if (pathname === '/api/providers/models') {
+        try { return json(res, 200, { models: await listModels({ baseUrl: body?.baseUrl, apiKey: body?.apiKey }) }); }
+        catch (cause) { throw new ClientError(400, cause instanceof Error ? cause.message : 'Could not load models.'); }
+      }
+      if (pathname === '/api/providers') {
+        try { providerSettings = await saveProvider(providerSettings, body); }
+        catch (cause) {
+          if (/^(Enter a provider|API URL|An API key|AI_BASE_URL)/.test(cause.message)) throw new ClientError(400, cause.message);
+          throw cause;
+        }
+        return json(res, 201, publicProviderSettings(providerSettings));
+      }
+      if (pathname === '/api/providers/select') {
+        try { providerSettings = selectProvider(providerSettings, body?.id); }
+        catch (cause) { throw new ClientError(404, cause.message); }
+        await saveProviderSettings(providerSettings);
+        return json(res, 200, publicProviderSettings(providerSettings));
+      }
+      if (pathname === '/api/providers/remove') {
+        try { providerSettings = removeProvider(providerSettings, body?.id); }
+        catch (cause) { throw new ClientError(404, cause.message); }
+        await saveProviderSettings(providerSettings);
+        return json(res, 200, publicProviderSettings(providerSettings));
+      }
+      if (pathname === '/api/providers/test') {
+        if (body?.id !== publicProviderSettings(providerSettings).activeId) throw new ClientError(400, 'Select this provider before testing.');
+        if (!activeProviderInfo(providerSettings).configured) throw new ClientError(400, 'Connect a provider first.');
+        try { return json(res, 200, await testConnection({ env: await activeProviderEnv(providerSettings) })); }
+        catch (cause) { throw new ClientError(502, cause instanceof Error ? cause.message : 'Connection test failed.'); }
+      }
       if (pathname === '/api/projects') {
         const next = makeWorkspace(body?.brief);
         const updated = { activeProjectId: next.id, projects: [...catalog.projects, next] };
@@ -91,13 +130,13 @@ const server = createServer(async (req, res) => {
         return json(res, 200, snapshot());
       }
       if (pathname === '/api/steps') {
-        if (!providerInfo().configured) throw new ClientError(503, 'Configure the AI provider in .env first.');
+        if (!activeProviderInfo(providerSettings).configured) throw new ClientError(503, 'Connect an AI provider in Settings first.');
         const project = requireActive(body?.projectId);
         const task = nextTask(project);
         try {
           touch(project);
           await saveStore(catalog);
-          const output = await generate(project, task, { onAttempt: progress => { operation = { type: 'task', projectId: project.id, ...progress }; } });
+          const output = await generate(project, task, { env: await activeProviderEnv(providerSettings), onAttempt: progress => { operation = { type: 'task', projectId: project.id, ...progress }; } });
           completeTask(project, task, output);
         } catch (error) {
           failTask(project, task, error instanceof Error ? error.message : 'AI request failed.');
@@ -107,7 +146,7 @@ const server = createServer(async (req, res) => {
         return json(res, 200, snapshot());
       }
       if (pathname === '/api/website') {
-        if (!providerInfo().configured) throw new ClientError(503, 'Configure the AI provider in .env first.');
+        if (!activeProviderInfo(providerSettings).configured) throw new ClientError(503, 'Connect an AI provider in Settings first.');
         const project = requireActive(body?.projectId);
         if (project.artifact) throw new ClientError(409, 'Website already generated for this project.');
         if (!project.tasks.length || project.tasks.some(task => task.status !== 'done')) {
@@ -115,7 +154,7 @@ const server = createServer(async (req, res) => {
         }
         operation = { type: 'website', projectId: project.id };
         let artifact;
-        try { artifact = await generateWebsite(project, { onAttempt: progress => { operation = { type: 'website', projectId: project.id, ...progress }; } }); }
+        try { artifact = await generateWebsite(project, { env: await activeProviderEnv(providerSettings), onAttempt: progress => { operation = { type: 'website', projectId: project.id, ...progress }; } }); }
         catch (cause) { throw new ClientError(502, cause instanceof Error ? cause.message : 'Could not generate website.'); }
         project.artifact = artifact;
         project.activity.unshift({ id: project.nextId++, agent: 'build', message: 'Website prototype is ready to preview and download.', time: artifact.createdAt });
