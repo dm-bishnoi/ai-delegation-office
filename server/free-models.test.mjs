@@ -1,0 +1,62 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import { eligibleFreeModels } from './free-models.mjs';
+import { generateWebsite } from './provider.mjs';
+import { makeWorkspace } from './workflow.mjs';
+
+const env = { AI_BASE_URL: 'https://openrouter.ai/api/v1', AI_MODEL: 'openrouter/free', AI_API_KEY: 'test-key' };
+const html = '<!doctype html><html><head><style>body{color:red}</style></head><body><h1>Portfolio</h1></body></html>';
+const model = (id, output = 16000, pricing = { prompt: '0', completion: '0', request: '0' }) => ({
+  id, pricing, context_length: 32000, top_provider: { max_completion_tokens: output },
+  architecture: { input_modalities: ['text'], output_modalities: ['text'] }, supported_parameters: ['max_tokens'],
+});
+const project = () => {
+  const workspace = makeWorkspace('A portfolio website');
+  for (const task of workspace.tasks) { task.status = 'done'; task.output = `Approved: ${task.title}`; }
+  return workspace;
+};
+
+test('catalog only selects verified zero-price models with enough output capacity', () => {
+  const models = [model('bad/paid:free', 16000, { prompt: '0', completion: '0.001', request: '0' }),
+    model('bad/empty:free', 16000, { prompt: '', completion: '0', request: '0' }),
+    model('bad/low:free', 4096), model('bad/no-suffix'), model('good/large:free'), model('good/medium:free', 8192)];
+  assert.deepEqual(eligibleFreeModels(models, 8000), ['good/large:free', 'good/medium:free']);
+});
+
+test('truncated website switches to at most two catalog-verified free models after delays', async () => {
+  const attempts = [];
+  const delays = [];
+  const progress = [];
+  const fetchImpl = async (url, options) => {
+    if (new URL(url).pathname.endsWith('/models')) {
+      assert.equal(options.headers.Authorization, 'Bearer test-key');
+      return { ok: true, json: async () => ({ data: [model('bad/paid:free', 16000, { prompt: '0', completion: '1', request: '0' }), model('good/large:free'), model('good/medium:free', 8192)] }) };
+    }
+    const request = JSON.parse(options.body);
+    attempts.push(request.model);
+    assert.equal(request.max_tokens, attempts.length === 1 ? 5500 : 8000);
+    return { ok: attempts.length !== 2, status: attempts.length === 2 ? 429 : 200,
+      json: async () => ({ choices: [{ message: { content: attempts.length === 1 ? '<!doctype html><html>' : html }, finish_reason: attempts.length === 1 ? 'length' : 'stop' }] }) };
+  };
+  const artifact = await generateWebsite(project(), { env, fetchImpl, sleepImpl: async ms => { delays.push(ms); }, onAttempt: status => progress.push(status) });
+  assert.deepEqual(attempts, ['openrouter/free', 'good/large:free', 'good/medium:free']);
+  assert.deepEqual(delays, [3000, 6000]);
+  assert.equal(artifact.model, 'good/medium:free');
+  assert.equal(artifact.attempts, 3);
+  assert.equal(progress.at(-1).attempt, 3);
+});
+
+test('fallback stops when disabled or when no verified free model is available', async () => {
+  let catalogCalls = 0;
+  const fetchImpl = async (url) => {
+    if (new URL(url).pathname.endsWith('/models')) {
+      catalogCalls++;
+      return { ok: true, json: async () => ({ data: [model('bad/paid:free', 16000, { prompt: '1', completion: '0', request: '0' })] }) };
+    }
+    return { ok: true, json: async () => ({ choices: [{ message: { content: '<!doctype html><html>' }, finish_reason: 'length' }] }) };
+  };
+  await assert.rejects(generateWebsite(project(), { env: { ...env, AI_FREE_FALLBACK: 'false' }, fetchImpl }), /truncated/);
+  assert.equal(catalogCalls, 0);
+  await assert.rejects(generateWebsite(project(), { env, fetchImpl }), /No verified free model/);
+  assert.equal(catalogCalls, 1);
+});
