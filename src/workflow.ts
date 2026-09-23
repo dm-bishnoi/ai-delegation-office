@@ -38,6 +38,8 @@ export interface Workspace {
   nextId: number;
   running?: boolean;
   artifact?: { kind: 'website'; filename: string; content: string; createdAt: string; model?: string; attempts?: number };
+  websiteDraft?: { body?: string; css?: string; model?: string; attempts?: number };
+  websiteError?: string;
 }
 
 export interface ProjectSummary {
@@ -46,6 +48,7 @@ export interface ProjectSummary {
   updatedAt: string;
   completed: number;
   total: number;
+  websiteStage?: string | null;
 }
 
 export const agents: Agent[] = [

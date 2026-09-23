@@ -142,7 +142,9 @@ const server = createServer(async (req, res) => {
         try {
           touch(project);
           await saveStore(catalog);
-          const output = await generate(project, task, { env: await activeProviderEnv(providerSettings), onAttempt: progress => { operation = { type: 'task', projectId: project.id, ...progress }; } });
+          const output = await generate(project, task, { env: await activeProviderEnv(providerSettings), onAttempt: progress => { operation = { type: 'task', projectId: project.id, ...progress,
+            readyAt: progress.phase === 'waiting' ? Date.now() + progress.delayMs : null,
+            deadlineAt: progress.phase === 'running' ? Date.now() + progress.timeoutMs : null }; } });
           completeTask(project, task, output);
         } catch (error) {
           failTask(project, task, error instanceof Error ? error.message : 'AI request failed.');
@@ -159,14 +161,27 @@ const server = createServer(async (req, res) => {
           throw new ClientError(409, 'Finish and approve all assignments before building a website.');
         }
         operation = { type: 'website', projectId: project.id };
+        delete project.websiteError;
         let artifact;
-        try { artifact = await generateWebsite(project, { env: await activeProviderEnv(providerSettings), onAttempt: progress => { operation = { type: 'website', projectId: project.id, ...progress }; } }); }
-        catch (cause) { throw new ClientError(502, cause instanceof Error ? cause.message : 'Could not generate website.'); }
-        project.artifact = artifact;
-        project.activity.unshift({ id: project.nextId++, agent: 'build', message: 'Website prototype is ready to preview and download.', time: artifact.createdAt });
-        project.activity = project.activity.slice(0, 100);
-        touch(project);
-        await saveStore(catalog);
+        try { artifact = await generateWebsite(project, { env: await activeProviderEnv(providerSettings), onAttempt: progress => { operation = { type: 'website', projectId: project.id, ...progress,
+          readyAt: progress.phase === 'waiting' ? Date.now() + progress.delayMs : null,
+          deadlineAt: progress.phase === 'running' ? Date.now() + progress.timeoutMs : null }; }, onCheckpoint: async () => { touch(project); await saveStore(catalog); } }); }
+        catch (cause) {
+          project.websiteError = cause instanceof Error ? cause.message : 'Could not generate website.';
+          touch(project);
+          await saveStore(catalog);
+          throw new ClientError(502, project.websiteError);
+        }
+        const updated = structuredClone(catalog);
+        const completed = updated.projects.find(item => item.id === project.id);
+        completed.artifact = artifact;
+        delete completed.websiteDraft;
+        delete completed.websiteError;
+        completed.activity.unshift({ id: completed.nextId++, agent: 'build', message: 'Website prototype is ready to preview and download.', time: artifact.createdAt });
+        completed.activity = completed.activity.slice(0, 100);
+        touch(completed);
+        await saveStore(updated);
+        catalog = updated;
         return json(res, 200, snapshot());
       }
       const decision = pathname.match(/^\/api\/tasks\/(\d+)\/decision$/);

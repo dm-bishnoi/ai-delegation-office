@@ -142,6 +142,11 @@ h1 em { color: #d8b989; font-family: Georgia, serif; font-weight: 400; letter-sp
 .artifact-source { margin-top: 13px; }
 .artifact-source summary { color: #dec395; font-size: 11px; cursor: pointer; }
 .artifact-source pre { max-height: 400px; overflow: auto; padding: 13px; border-radius: 5px; color: #d2ded6; background: #121b1d; font: 11px/1.5 ui-monospace, monospace; }
+.draft-progress { margin: 14px 0; padding: 13px; border: 1px solid #648578; border-radius: 6px; background: #21312e; color: #d5e9da; font-size: 11px; }
+.draft-progress p { color: #aebfbb; line-height: 1.6; }
+.draft-progress summary { color: #dfc499; cursor: pointer; }
+.draft-progress pre { max-height: 180px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font: 11px/1.5 ui-monospace, monospace; }
+.draft-error { color: #e9afa0 !important; }
 .task-card .task-error { color: #efaaa0; margin: 12px 0 0; overflow-wrap: anywhere; }
 .review-actions { flex-wrap: wrap; }
 .review-actions textarea { width: 100%; min-height: 58px; resize: vertical; background: #151e20; color: #e2e6dc; border: 1px solid #526161; border-radius: 4px; padding: 8px; font: 10px/1.5 'DM Sans', sans-serif; }

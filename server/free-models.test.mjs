@@ -5,7 +5,8 @@ import { generateWebsite } from './provider.mjs';
 import { makeWorkspace } from './workflow.mjs';
 
 const env = { AI_BASE_URL: 'https://openrouter.ai/api/v1', AI_MODEL: 'openrouter/free', AI_API_KEY: 'test-key' };
-const html = '<!doctype html><html><head><style>body{color:red}</style></head><body><h1>Portfolio</h1></body></html>';
+const css = 'body{color:red}';
+const body = '<main><h1>Portfolio</h1></main>';
 const model = (id, output = 16000, pricing = { prompt: '0', completion: '0', request: '0' }) => ({
   id, pricing, context_length: 32000, top_provider: { max_completion_tokens: output },
   architecture: { input_modalities: ['text'], output_modalities: ['text'] }, supported_parameters: ['max_tokens'],
@@ -21,31 +22,35 @@ test('catalog only selects verified zero-price models with enough output capacit
     model('bad/empty:free', 16000, { prompt: '', completion: '0', request: '0' }),
     model('bad/low:free', 4096), model('bad/no-suffix'), model('good/large:free'), model('good/medium:free', 8192)];
   assert.deepEqual(eligibleFreeModels(models, 8000), ['good/large:free', 'good/medium:free']);
+  const unknown = model('good/unspecified:free');
+  unknown.top_provider.max_completion_tokens = null;
+  assert.deepEqual(eligibleFreeModels([unknown, model('bad/too-small:free', 256)], 1200), ['good/unspecified:free']);
 });
 
-test('broken website response retries two verified free models within their output limits', async () => {
+test('broken website response retries free models with a 1200-token cap for unknown output capacity', async () => {
   const attempts = [];
   const delays = [];
   const progress = [];
   const fetchImpl = async (url, options) => {
     if (new URL(url).pathname.endsWith('/models')) {
       assert.equal(options.headers.Authorization, 'Bearer test-key');
-      return { ok: true, json: async () => ({ data: [model('bad/paid:free', 16000, { prompt: '0', completion: '1', request: '0' }), model('good/large:free', 6000), model('good/medium:free', 4096)] }) };
+      return { ok: true, json: async () => ({ data: [model('bad/paid:free', 16000, { prompt: '0', completion: '1', request: '0' }), model('good/large:free', 2048), model('good/medium:free', null)] }) };
     }
     const request = JSON.parse(options.body);
     attempts.push(request.model);
-    assert.equal(request.max_tokens, attempts.length === 3 ? 4096 : 5500);
+    assert.equal(request.max_tokens, attempts.length >= 3 ? 1200 : 1500);
     if (attempts.length === 1) return { ok: true, headers: { get: () => 'application/json' },
       text: async () => { throw Error('connection broke while reading body'); } };
     return { ok: attempts.length !== 2, status: attempts.length === 2 ? 429 : 200,
-      json: async () => ({ choices: [{ message: { content: html }, finish_reason: 'stop' }] }) };
+      json: async () => ({ choices: [{ message: { content: attempts.length === 4 ? css : body }, finish_reason: 'stop' }] }) };
   };
   const artifact = await generateWebsite(project(), { env, fetchImpl, sleepImpl: async ms => { delays.push(ms); }, onAttempt: status => progress.push(status) });
-  assert.deepEqual(attempts, ['openrouter/free', 'good/large:free', 'good/medium:free']);
+  assert.deepEqual(attempts, ['openrouter/free', 'good/large:free', 'good/medium:free', 'openrouter/free']);
   assert.deepEqual(delays, [3000, 6000]);
-  assert.equal(artifact.model, 'good/medium:free');
-  assert.equal(artifact.attempts, 3);
-  assert.equal(progress.at(-1).attempt, 3);
+  assert.equal(artifact.model, 'openrouter/free');
+  assert.equal(artifact.attempts, 4);
+  assert.equal(progress.findLast(item => item.stage === 'body').attempt, 3);
+  assert.equal(progress.at(-1).stage, 'css');
 });
 
 test('fallback stops when disabled or when no verified free model is available', async () => {
@@ -59,7 +64,7 @@ test('fallback stops when disabled or when no verified free model is available',
   };
   await assert.rejects(generateWebsite(project(), { env: { ...env, AI_FREE_FALLBACK: 'false' }, fetchImpl }), /truncated/);
   assert.equal(catalogCalls, 0);
-  await assert.rejects(generateWebsite(project(), { env, fetchImpl }), /No verified free model/);
+  await assert.rejects(generateWebsite(project(), { env, fetchImpl }), /No zero-price free text fallback/);
   assert.equal(catalogCalls, 1);
 });
 

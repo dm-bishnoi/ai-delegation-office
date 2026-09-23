@@ -73,27 +73,55 @@ test('website generation requires an approved project, validates full HTML, and 
   const path = join(dir, 'projects.json');
   const workspace = makeWorkspace('A portfolio website');
   const env = { AI_BASE_URL: 'http://127.0.0.1:9999/v1', AI_API_KEY: 'test-key', AI_MODEL: 'test-model' };
-  const html = '<!doctype html><html><head><style>body{color:red}</style></head><body><h1>Portfolio</h1></body></html>';
+  const css = 'body{color:red}';
+  const body = '<main><h1>Portfolio</h1></main>';
+  let calls = 0;
   const fetchImpl = async (_url, options) => {
     const payload = JSON.parse(options.body);
-    assert.equal(payload.max_tokens, 5500);
+    assert.equal(payload.max_tokens, ++calls === 1 ? 1500 : 1200);
     assert.equal(payload.stream, false);
     assert.equal(options.headers.Accept, 'application/json');
     assert.match(payload.messages[1].content, /portfolio website/i);
-    return { ok: true, json: async () => ({ choices: [{ message: { content: html }, finish_reason: 'stop' }] }) };
+    return { ok: true, json: async () => ({ choices: [{ message: { content: calls === 1 ? body : css }, finish_reason: 'stop' }] }) };
   };
   try {
     await assert.rejects(generateWebsite(workspace, { env, fetchImpl }), /Finish and approve/);
     for (const task of workspace.tasks) { task.status = 'done'; task.output = `Plan for ${task.title}`; }
     const artifact = await generateWebsite(workspace, { env, fetchImpl });
     assert.equal(artifact.filename, 'index.html');
-    assert.equal(artifact.content, html);
+    assert.match(artifact.content, /<style>\s*body\{color:red\}/);
+    assert.match(artifact.content, /<main><h1>Portfolio<\/h1><\/main>/);
     workspace.artifact = artifact;
     await saveStore({ activeProjectId: workspace.id, projects: [workspace] }, path);
     const restored = await loadStore(path, join(dir, 'legacy.json'));
-    assert.equal(restored.projects[0].artifact.content, html);
-    await assert.rejects(generateWebsite(workspace, { env, fetchImpl: async () => ({ ok: true, json: async () => ({ choices: [{ message: { content: html }, finish_reason: 'length' }] }) }) }), /truncated/);
-    await assert.rejects(generateWebsite(workspace, { env, fetchImpl: async () => ({ ok: true, json: async () => ({ choices: [{ message: { content: '<h1>partial</h1>' }, finish_reason: 'stop' }] }) }) }), /complete standalone/);
+    assert.equal(restored.projects[0].artifact.content, artifact.content);
+    await assert.rejects(generateWebsite({ ...workspace, websiteDraft: undefined }, { env, fetchImpl: async () => ({ ok: true, json: async () => ({ choices: [{ message: { content: body }, finish_reason: 'length' }] }) }) }), /truncated/);
+    await assert.rejects(generateWebsite({ ...workspace, websiteDraft: undefined }, { env, fetchImpl: async () => ({ ok: true, json: async () => ({ choices: [{ message: { content: '<h1>partial</h1>' }, finish_reason: 'stop' }] }) }) }), /valid page HTML/);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test('a failed website stylesheet resumes from the saved page after restart', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'relay-resume-'));
+  const path = join(dir, 'projects.json');
+  const workspace = makeWorkspace('Portfolio website');
+  for (const task of workspace.tasks) { task.status = 'done'; task.output = 'Approved plan.'; }
+  const env = { AI_BASE_URL: 'http://127.0.0.1:9999/v1', AI_API_KEY: 'test-key', AI_MODEL: 'test-model' };
+  let requests = 0;
+  try {
+    await assert.rejects(generateWebsite(workspace, { env, fetchImpl: async () => {
+      requests++;
+      if (requests === 2) throw new Error('provider disconnected');
+      return { ok: true, json: async () => ({ choices: [{ message: { content: '<main><h1>Portfolio</h1></main>' }, finish_reason: 'stop' }] }) };
+    }, onCheckpoint: async () => saveStore({ activeProjectId: workspace.id, projects: [workspace] }, path) }), /Could not reach/);
+    assert.equal(requests, 2);
+    const restored = (await loadStore(path, join(dir, 'legacy.json'))).projects[0];
+    assert.equal(restored.websiteDraft.body, '<main><h1>Portfolio</h1></main>');
+    const artifact = await generateWebsite(restored, { env, fetchImpl: async (_url, options) => {
+      assert.equal(JSON.parse(options.body).max_tokens, 1200);
+      return { ok: true, json: async () => ({ choices: [{ message: { content: 'body{color:red}' }, finish_reason: 'stop' }] }) };
+    } });
+    assert.match(artifact.content, /body\{color:red\}/);
+    assert.match(artifact.content, /<h1>Portfolio<\/h1>/);
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
 
