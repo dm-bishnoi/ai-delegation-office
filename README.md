@@ -31,10 +31,12 @@ Visit Vite's displayed URL. The script runs the browser UI and the local Node AP
 
 ## Workflow
 
-1. Enter a brief. This creates four ordered assignments; starting a new brief replaces the previous local project.
+1. Enter a brief. This creates four ordered assignments and a saved project. Starting another brief keeps earlier projects in the sidebar; select one to resume it.
 2. Press **Step** for one AI response or **Run team** to continue automatically. The next agent sees approved earlier deliverables as context.
 3. Nova's strategy and Echo's final review stop for human approval. Read the deliverable, approve it, or enter specific revision feedback. Revision reruns that assignment.
-4. Provider errors leave the assignment in **Needs attention** with a retry button. The workspace and activity history are saved in `data/workspace.json` and restored after a restart. An interrupted in-flight task becomes retryable.
+4. Provider errors leave the assignment in **Needs attention** with a retry button. Projects and activity history are saved in `data/projects.json` and restored after a restart. Existing `data/workspace.json` data from v0.2 is imported automatically and kept as a backup. An interrupted in-flight task becomes retryable.
+
+In the 3D scene, drag to orbit and scroll to zoom. Agents move to their desks when generating a task and to the shared review table while awaiting approval. Their floor rings show active, review, and failed states. You can always select an agent from the sidebar if WebGL is unavailable.
 
 The model is asked for written plans, design outlines, implementation plans, and a review checklist. It does **not** execute code, browse websites, create files, or independently verify its claims. Treat generated content as a draft requiring human review. Run/pause controls do not cancel an in-flight provider request; pause takes effect after it returns.
 
@@ -45,14 +47,14 @@ npm test
 npm run build
 ```
 
-Tests exercise approvals, revision context, failed-task recovery, and provider URL validation with a mocked response. A real provider call requires your own credentials and has not been validated by CI.
+Tests exercise approvals, revision context, project migration, failed-task recovery, and provider URL validation with a mocked response. A real provider call requires your own credentials and has not been validated by CI.
 
 ## Scope and security
 
-- Single local workspace, bound to `127.0.0.1`. There is no login, multi-user isolation, hosted database, or deployment hardening. Do not expose the Node API to the public internet.
+- Multiple saved projects in one local workspace, bound to `127.0.0.1`. There is no login, multi-user isolation, hosted database, or deployment hardening. Do not expose the Node API to the public internet.
 - The API key remains on the Node server; only provider readiness and model name are sent to the browser. Briefs and outputs are stored locally in `data/`, which is gitignored.
 - The office geometry is made from primitives at runtime. No source or noncommercial assets from [The Delegation](https://github.com/arturitu/the-delegation) are included. No license has been selected for this repository.
 
 ## Next milestones
 
-Add project history and authentication, durable database storage, typed artifacts and streaming events, task dependencies and provider budgets, then richer original office assets and movement tied to actual execution events.
+Add authentication, durable database storage, typed artifacts and streaming events, task dependencies and provider budgets, then richer original office assets and multi-user collaboration.

@@ -5,13 +5,30 @@ import { extname, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ClientError, completeTask, decide, failTask, makeWorkspace, nextTask, retry } from './workflow.mjs';
 import { generate, providerInfo } from './provider.mjs';
-import { loadWorkspace, saveWorkspace } from './store.mjs';
+import { loadStore, projectSummaries, saveStore } from './store.mjs';
 
 const port = Number(process.env.API_PORT || 3001);
 if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('API_PORT must be a valid port.');
 const dist = resolve(fileURLToPath(new URL('../dist/', import.meta.url)));
-let workspace = await loadWorkspace();
+let catalog = await loadStore();
 let busy = false;
+
+function activeProject() {
+  return catalog.projects.find(project => project.id === catalog.activeProjectId) || null;
+}
+
+function snapshot() {
+  return { workspace: activeProject(), projects: projectSummaries(catalog), provider: providerInfo(), busy };
+}
+
+function requireActive(projectId) {
+  const project = activeProject();
+  if (!project) throw new ClientError(404, 'Create a project first.');
+  if (project.id !== projectId) throw new ClientError(409, 'The active project changed. Refresh the page.');
+  return project;
+}
+
+function touch(project) { project.updatedAt = new Date().toISOString(); }
 
 function json(res, status, body) {
   res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' });
@@ -50,7 +67,7 @@ const server = createServer(async (req, res) => {
   try {
     const { pathname } = new URL(req.url, 'http://localhost');
     if (!pathname.startsWith('/api/')) return await serveStatic(pathname, res);
-    if (req.method === 'GET' && pathname === '/api/workspace') return json(res, 200, { workspace, provider: providerInfo(), busy });
+    if (req.method === 'GET' && pathname === '/api/workspace') return json(res, 200, snapshot());
     if (req.method !== 'POST') return json(res, 405, { error: 'Method not allowed.' });
     if (busy) throw new ClientError(409, 'An AI task is still running.');
     const body = await readJson(req);
@@ -59,34 +76,50 @@ const server = createServer(async (req, res) => {
     try {
       if (pathname === '/api/projects') {
         const next = makeWorkspace(body?.brief);
-        await saveWorkspace(next);
-        workspace = next;
-        return json(res, 201, { workspace });
+        const updated = { activeProjectId: next.id, projects: [...catalog.projects, next] };
+        await saveStore(updated);
+        catalog = updated;
+        return json(res, 201, snapshot());
+      }
+      const selection = pathname.match(/^\/api\/projects\/([a-zA-Z0-9-]+)\/select$/);
+      if (selection) {
+        if (!catalog.projects.some(project => project.id === selection[1])) throw new ClientError(404, 'Project not found.');
+        const updated = { ...catalog, activeProjectId: selection[1] };
+        await saveStore(updated);
+        catalog = updated;
+        return json(res, 200, snapshot());
       }
       if (pathname === '/api/steps') {
         if (!providerInfo().configured) throw new ClientError(503, 'Configure the AI provider in .env first.');
-        const task = nextTask(workspace);
+        const project = requireActive(body?.projectId);
+        const task = nextTask(project);
         try {
-          await saveWorkspace(workspace);
-          const output = await generate(workspace, task);
-          completeTask(workspace, task, output);
+          touch(project);
+          await saveStore(catalog);
+          const output = await generate(project, task);
+          completeTask(project, task, output);
         } catch (error) {
-          failTask(workspace, task, error instanceof Error ? error.message : 'AI request failed.');
+          failTask(project, task, error instanceof Error ? error.message : 'AI request failed.');
         }
-        await saveWorkspace(workspace);
-        return json(res, 200, { workspace });
+        touch(project);
+        await saveStore(catalog);
+        return json(res, 200, snapshot());
       }
       const decision = pathname.match(/^\/api\/tasks\/(\d+)\/decision$/);
       if (decision) {
-        decide(workspace, Number(decision[1]), body?.decision, body?.feedback);
-        await saveWorkspace(workspace);
-        return json(res, 200, { workspace });
+        const project = requireActive(body?.projectId);
+        decide(project, Number(decision[1]), body?.decision, body?.feedback);
+        touch(project);
+        await saveStore(catalog);
+        return json(res, 200, snapshot());
       }
       const retryMatch = pathname.match(/^\/api\/tasks\/(\d+)\/retry$/);
       if (retryMatch) {
-        retry(workspace, Number(retryMatch[1]));
-        await saveWorkspace(workspace);
-        return json(res, 200, { workspace });
+        const project = requireActive(body?.projectId);
+        retry(project, Number(retryMatch[1]));
+        touch(project);
+        await saveStore(catalog);
+        return json(res, 200, snapshot());
       }
       return json(res, 404, { error: 'Not found.' });
     } finally { busy = false; }

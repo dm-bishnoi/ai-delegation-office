@@ -21,8 +21,16 @@ export default function OfficeScene({ workspace, selected, onSelect }: Props) {
     const scene = new THREE.Scene();
     scene.background = new THREE.Color('#10171a');
     const camera = new THREE.PerspectiveCamera(38, 1, 0.1, 100);
-    camera.position.set(9, 11, 13);
-    camera.lookAt(0, 0, 0);
+    const view = { azimuth: 0.6, elevation: 0.64, distance: 16 };
+    function updateCamera() {
+      camera.position.set(
+        Math.sin(view.azimuth) * Math.cos(view.elevation) * view.distance,
+        Math.sin(view.elevation) * view.distance,
+        Math.cos(view.azimuth) * Math.cos(view.elevation) * view.distance,
+      );
+      camera.lookAt(0, 0.55, 0);
+    }
+    updateCamera();
     let renderer: THREE.WebGLRenderer;
     try {
       renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
@@ -46,8 +54,8 @@ export default function OfficeScene({ workspace, selected, onSelect }: Props) {
     const metalMat = material('#262e30', 0.45);
     const monitorMat = new THREE.MeshStandardMaterial({ color: '#1c363b', emissive: '#214e52', emissiveIntensity: 0.6, roughness: 0.3 });
     const wallMat = material('#303b3a');
-    const shared: THREE.Material[] = [floorMat, deskMat, metalMat, monitorMat, wallMat];
     const geometries: THREE.BufferGeometry[] = [];
+    const textures: THREE.Texture[] = [];
     const box = (width: number, height: number, depth: number, mat: THREE.Material, x: number, y: number, z: number) => {
       const geometry = new THREE.BoxGeometry(width, height, depth);
       geometries.push(geometry);
@@ -68,9 +76,18 @@ export default function OfficeScene({ workspace, selected, onSelect }: Props) {
     box(1.0, 0.08, 0.32, deskMat, 3.7, 0.72, -3.72);
     box(0.42, 0.72, 0.42, material('#648674'), 3.85, 0.36, -3.65);
     box(1.5, 0.1, 0.6, deskMat, -3.8, 0.85, -3.73);
+    // Shared review table: agents walk here when a deliverable needs approval.
+    const tableGeometry = new THREE.CylinderGeometry(0.9, 0.9, 0.1, 32);
+    geometries.push(tableGeometry);
+    const table = new THREE.Mesh(tableGeometry, deskMat);
+    table.position.set(0, 0.74, 0);
+    scene.add(table);
+    box(0.15, 0.7, 0.15, metalMat, 0, 0.36, 0);
+    box(1.4, 0.04, 0.06, material('#c6ac80'), 0, 2.1, -4.0);
 
     const avatarMeshes: THREE.Group[] = [];
     const accentMaterials: THREE.MeshStandardMaterial[] = [];
+    const haloMaterials: THREE.MeshBasicMaterial[] = [];
     agents.forEach((agent, index) => {
       const [x, z] = positions[index];
       const deskZ = z - 0.5;
@@ -102,17 +119,72 @@ export default function OfficeScene({ workspace, selected, onSelect }: Props) {
       group.add(head);
       const haloGeometry = new THREE.RingGeometry(0.38, 0.42, 32);
       geometries.push(haloGeometry);
-      const halo = new THREE.Mesh(haloGeometry, new THREE.MeshBasicMaterial({ color: agent.color, side: THREE.DoubleSide, transparent: true, opacity: 0.7 }));
+      const haloMaterial = new THREE.MeshBasicMaterial({ color: agent.color, side: THREE.DoubleSide, transparent: true, opacity: 0.7 });
+      haloMaterials.push(haloMaterial);
+      const halo = new THREE.Mesh(haloGeometry, haloMaterial);
       halo.rotation.x = -Math.PI / 2;
       halo.position.y = 0.02;
       group.add(halo);
+      const labelCanvas = document.createElement('canvas');
+      labelCanvas.width = 256;
+      labelCanvas.height = 64;
+      const context = labelCanvas.getContext('2d');
+      if (context) {
+        context.fillStyle = '#162126';
+        context.fillRect(0, 0, 256, 64);
+        context.fillStyle = agent.color;
+        context.fillRect(0, 0, 6, 64);
+        context.fillStyle = '#f2eee4';
+        context.font = 'bold 29px sans-serif';
+        context.fillText(agent.name.toUpperCase(), 22, 42);
+        const labelTexture = new THREE.CanvasTexture(labelCanvas);
+        textures.push(labelTexture);
+        const label = new THREE.Sprite(new THREE.SpriteMaterial({ map: labelTexture, transparent: true, depthTest: false }));
+        label.position.y = 1.53;
+        label.scale.set(1.55, 0.39, 1);
+        group.add(label);
+      }
       scene.add(group);
       avatarMeshes.push(group);
     });
 
     const raycaster = new THREE.Raycaster();
     const pointer = new THREE.Vector2();
+    let drag: { x: number; y: number; moved: boolean } | null = null;
+    let suppressClick = false;
+    renderer.domElement.style.touchAction = 'none';
+    renderer.domElement.style.cursor = 'grab';
+    function pointerDown(event: PointerEvent) {
+      drag = { x: event.clientX, y: event.clientY, moved: false };
+      renderer.domElement.setPointerCapture(event.pointerId);
+      renderer.domElement.style.cursor = 'grabbing';
+    }
+    function pointerMove(event: PointerEvent) {
+      if (!drag) return;
+      const dx = event.clientX - drag.x;
+      const dy = event.clientY - drag.y;
+      if (Math.abs(dx) + Math.abs(dy) > 2) drag.moved = true;
+      if (drag.moved) {
+        view.azimuth -= dx * 0.006;
+        view.elevation = THREE.MathUtils.clamp(view.elevation + dy * 0.005, 0.28, 1.22);
+        updateCamera();
+      }
+      drag.x = event.clientX;
+      drag.y = event.clientY;
+    }
+    function pointerUp() {
+      suppressClick = Boolean(drag?.moved);
+      window.setTimeout(() => { suppressClick = false; }, 0);
+      drag = null;
+      renderer.domElement.style.cursor = 'grab';
+    }
+    function zoom(event: WheelEvent) {
+      event.preventDefault();
+      view.distance = THREE.MathUtils.clamp(view.distance + event.deltaY * 0.014, 12, 25);
+      updateCamera();
+    }
     function selectAgent(event: MouseEvent) {
+      if (suppressClick) { suppressClick = false; return; }
       const rect = renderer.domElement.getBoundingClientRect();
       pointer.set(((event.clientX - rect.left) / rect.width) * 2 - 1, -((event.clientY - rect.top) / rect.height) * 2 + 1);
       raycaster.setFromCamera(pointer, camera);
@@ -124,6 +196,11 @@ export default function OfficeScene({ workspace, selected, onSelect }: Props) {
       }
     }
     renderer.domElement.addEventListener('click', selectAgent);
+    renderer.domElement.addEventListener('pointerdown', pointerDown);
+    renderer.domElement.addEventListener('pointermove', pointerMove);
+    renderer.domElement.addEventListener('pointerup', pointerUp);
+    renderer.domElement.addEventListener('pointercancel', pointerUp);
+    renderer.domElement.addEventListener('wheel', zoom, { passive: false });
     const observer = new ResizeObserver(() => {
       const width = container.clientWidth;
       const height = container.clientHeight;
@@ -135,13 +212,26 @@ export default function OfficeScene({ workspace, selected, onSelect }: Props) {
     observer.observe(container);
     let frame = 0;
     const clock = new THREE.Clock();
+    const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     function animate() {
       frame = requestAnimationFrame(animate);
-      const t = clock.getElapsedTime();
+      const delta = Math.min(clock.getDelta(), 0.05);
+      const t = clock.elapsedTime;
       agents.forEach((agent, index) => {
-        const busy = data.current.workspace.tasks.some(task => task.owner === agent.id && task.status === 'active');
-        avatarMeshes[index].position.y = busy ? Math.sin(t * 3 + index) * 0.045 : Math.sin(t * 1.4 + index) * 0.012;
-        accentMaterials[index].emissiveIntensity = data.current.selected === agent.id ? 0.35 : busy ? 0.2 : 0;
+        const task = data.current.workspace.tasks.find(item => item.owner === agent.id);
+        const status = task?.status ?? 'queued';
+        const [deskX, deskZ] = positions[index];
+        const targetX = status === 'review' ? (index % 2 ? 1.15 : -1.15) : status === 'active' ? deskX : deskX + 0.62;
+        const targetZ = status === 'review' ? (index < 2 ? -0.65 : 0.95) : status === 'active' ? deskZ + 0.33 : deskZ + 0.73;
+        const avatar = avatarMeshes[index];
+        const easing = reduceMotion ? 1 : Math.min(delta * 2.8, 1);
+        avatar.position.x = THREE.MathUtils.lerp(avatar.position.x, targetX, easing);
+        avatar.position.z = THREE.MathUtils.lerp(avatar.position.z, targetZ, easing);
+        avatar.position.y = reduceMotion ? 0 : status === 'active' ? Math.sin(t * 3 + index) * 0.035 : Math.sin(t * 1.4 + index) * 0.01;
+        const ring = haloMaterials[index];
+        ring.color.set(status === 'failed' ? '#db8276' : status === 'review' ? '#c4a2e2' : status === 'active' ? '#e6c782' : agent.color);
+        ring.opacity = status === 'active' && !reduceMotion ? 0.6 + Math.sin(t * 4) * 0.25 : 0.78;
+        accentMaterials[index].emissiveIntensity = data.current.selected === agent.id ? 0.35 : status === 'active' ? 0.2 : 0;
       });
       renderer.render(scene, camera);
     }
@@ -150,18 +240,26 @@ export default function OfficeScene({ workspace, selected, onSelect }: Props) {
       cancelAnimationFrame(frame);
       observer.disconnect();
       renderer.domElement.removeEventListener('click', selectAgent);
+      renderer.domElement.removeEventListener('pointerdown', pointerDown);
+      renderer.domElement.removeEventListener('pointermove', pointerMove);
+      renderer.domElement.removeEventListener('pointerup', pointerUp);
+      renderer.domElement.removeEventListener('pointercancel', pointerUp);
+      renderer.domElement.removeEventListener('wheel', zoom);
       container.removeChild(renderer.domElement);
       renderer.dispose();
       geometries.forEach(geometry => geometry.dispose());
       scene.traverse(object => {
-        if (object instanceof THREE.Mesh) {
+        if (object instanceof THREE.Mesh || object instanceof THREE.Sprite) {
           const mats = Array.isArray(object.material) ? object.material : [object.material];
           mats.forEach(mat => mat.dispose());
         }
       });
-      shared.forEach(mat => mat.dispose());
+      grid.geometry.dispose();
+      if (Array.isArray(grid.material)) grid.material.forEach(mat => mat.dispose());
+      else grid.material.dispose();
+      textures.forEach(texture => texture.dispose());
     };
   }, []);
 
-  return <div className="office-canvas" ref={mount}><div className="scene-fallback">3D preview needs WebGL. The workspace controls remain available.</div></div>;
+  return <div className="office-canvas" ref={mount}><div className="scene-hint">DRAG TO ORBIT · SCROLL TO ZOOM</div><div className="scene-fallback">3D preview needs WebGL. The workspace controls remain available.</div></div>;
 }

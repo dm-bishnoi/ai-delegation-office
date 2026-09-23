@@ -30,11 +30,21 @@ export interface Entry {
 
 export interface Workspace {
   id?: string;
+  createdAt?: string;
+  updatedAt?: string;
   brief: string;
   tasks: Task[];
   activity: Entry[];
   nextId: number;
   running?: boolean;
+}
+
+export interface ProjectSummary {
+  id: string;
+  brief: string;
+  updatedAt: string;
+  completed: number;
+  total: number;
 }
 
 export const agents: Agent[] = [
