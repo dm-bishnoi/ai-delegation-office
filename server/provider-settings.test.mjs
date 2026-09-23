@@ -27,7 +27,12 @@ test('provider connection is encrypted, survives restart, and routes task reques
     assert.equal(active.AI_FREE_FALLBACK, 'true');
     const workspace = makeWorkspace('Create a simple project.');
     let calls = 0;
-    const fetchImpl = async (_url, options) => {
+    const fetchImpl = async (url, options) => {
+      if (String(url).endsWith('/key')) {
+        assert.equal(options.method, undefined);
+        assert.equal(options.headers.Authorization, 'Bearer private-test-key');
+        return { ok: true, json: async () => ({ data: { free_model_daily_requests: { remaining: 3 } } }) };
+      }
       calls++;
       assert.equal(options.headers.Authorization, 'Bearer private-test-key');
       assert.equal(JSON.parse(options.body).model, 'test/free:free');
@@ -35,7 +40,9 @@ test('provider connection is encrypted, survives restart, and routes task reques
     };
     assert.equal(await generate(workspace, nextTask(workspace), { env: active, fetchImpl }), 'Done.');
     assert.equal(calls, 1);
-    assert.equal((await testConnection({ env: active, fetchImpl })).status, 'connected');
+    assert.deepEqual(await testConnection({ env: active, fetchImpl }),
+      { status: 'connected', model: 'test/free:free', check: 'credentials', freeRemaining: 3 });
+    assert.equal(calls, 1);
     settings = setProviderFallback(settings, settings.providers[0].id, false);
     assert.equal((await activeProviderEnv(settings, fallback, secret)).AI_FREE_FALLBACK, 'false');
     settings = setProviderFallback(settings, settings.providers[0].id, true);
@@ -45,6 +52,17 @@ test('provider connection is encrypted, survives restart, and routes task reques
     settings = removeProvider(settings, settings.providers[0].id);
     assert.equal(settings.providers.length, 0);
   } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test('OpenRouter key check reports bad credentials and timeouts without running a model', async () => {
+  const env = { AI_BASE_URL: 'https://openrouter.ai/api/v1', AI_MODEL: 'free/model:free', AI_API_KEY: 'test-key' };
+  await assert.rejects(testConnection({ env, fetchImpl: async () => ({ ok: false, status: 401,
+    json: async () => ({ error: { message: 'private provider detail' } }) }) }), error => {
+    assert.match(error.message, /HTTP 401/);
+    assert.doesNotMatch(error.message, /private provider detail/);
+    return true;
+  });
+  await assert.rejects(testConnection({ env, fetchImpl: async () => { throw Object.assign(new Error(), { name: 'TimeoutError' }); } }), /key check timed out/);
 });
 
 test('malformed provider JSON is diagnosed without exposing its response body', async () => {

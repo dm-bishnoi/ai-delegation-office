@@ -1,6 +1,6 @@
 import 'dotenv/config';
 import { agents } from './workflow.mjs';
-import { withFreeFallback } from './free-models.mjs';
+import { isOpenRouter, withFreeFallback } from './free-models.mjs';
 
 function providerError(message, retryable = false) {
   const error = new Error(message);
@@ -38,8 +38,25 @@ export function providerInfo(env = process.env) {
 }
 
 export async function testConnection({ env = process.env, fetchImpl = fetch } = {}) {
+  if (isOpenRouter(env.AI_BASE_URL?.trim())) {
+    if (!providerInfo(env).configured) throw new Error('Connect OpenRouter with an API key and model first.');
+    let response;
+    try { response = await fetchImpl('https://openrouter.ai/api/v1/key', {
+      headers: { Authorization: `Bearer ${env.AI_API_KEY.trim()}`, Accept: 'application/json' },
+      signal: AbortSignal.timeout(10000), redirect: 'error',
+    }); }
+    catch (error) { throw providerError(error?.name === 'TimeoutError' ? 'OpenRouter key check timed out. Try again shortly.' : 'Could not reach OpenRouter to check the API key.', true); }
+    if (!response.ok) throw await providerFailure(response);
+    let payload;
+    try { payload = await response.json(); }
+    catch { throw new Error('OpenRouter key check returned invalid JSON.'); }
+    if (!payload?.data || typeof payload.data !== 'object' || Array.isArray(payload.data)) throw new Error('OpenRouter key check returned no account details.');
+    const remaining = payload.data.free_model_daily_requests?.remaining;
+    return { status: 'connected', model: env.AI_MODEL.trim(), check: 'credentials',
+      freeRemaining: Number.isFinite(remaining) && remaining >= 0 ? remaining : null };
+  }
   await completion('Answer in one word.', 'Reply OK.', { env, fetchImpl, model: env.AI_MODEL?.trim(), maxTokens: 16 });
-  return { status: 'connected', model: env.AI_MODEL.trim() };
+  return { status: 'connected', model: env.AI_MODEL.trim(), check: 'generation' };
 }
 
 export function providerEndpoint(base) {
