@@ -113,8 +113,20 @@ async function completion(system, prompt, { env, fetchImpl, model, maxTokens }) 
   if (contentType.includes('text/event-stream')) throw new Error('AI provider returned a streaming response instead of JSON. Disable streaming in your gateway; the request sets stream=false.');
   if (contentType.includes('text/html')) throw new Error('AI provider returned an HTML page instead of JSON. Check AI_BASE_URL points to an OpenAI-compatible API prefix.');
   let payload;
-  try { payload = await response.json(); }
-  catch { throw providerError('AI provider returned an empty or malformed JSON response. Retry the request; if this keeps happening, check AI_BASE_URL and AI_MODEL.', true); }
+  if (typeof response.text === 'function') {
+    let body;
+    try { body = await response.text(); }
+    catch { throw providerError('AI provider connection ended while reading its response. Retry after a short delay.', true); }
+    if (!body.trim()) throw providerError('AI provider returned an empty response. Check the selected model and provider logs.', true);
+    try { payload = JSON.parse(body); }
+    catch {
+      const kind = contentType.includes('json') ? 'invalid JSON' : contentType.includes('text/plain') ? 'plain text instead of JSON' : 'a non-JSON response';
+      throw providerError(`AI provider returned ${kind} (HTTP ${response.status}). Check its gateway logs and selected model. A short connection test may pass even if a larger website response fails.`, true);
+    }
+  } else {
+    try { payload = await response.json(); }
+    catch { throw providerError('AI provider returned an empty or malformed JSON response. Check the selected model and provider logs.', true); }
+  }
   if (payload?.error) throw new Error('AI provider returned an error instead of a completion. Check AI_MODEL, quota, and provider logs.');
   const output = payload?.choices?.[0]?.message?.content;
   if (typeof output !== 'string' || !output.trim()) throw providerError('AI provider returned no text.', true);

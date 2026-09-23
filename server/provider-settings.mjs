@@ -3,6 +3,7 @@ import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { providerEndpoint, providerInfo } from './provider.mjs';
+import { isOpenRouter } from './free-models.mjs';
 
 const dataDirectory = join(dirname(fileURLToPath(import.meta.url)), '..', 'data');
 export const settingsFile = join(dataDirectory, 'providers.json');
@@ -70,8 +71,10 @@ export function publicProviderSettings(settings, env = process.env) {
   return {
     activeId: active?.id || (fallback.configured ? 'env' : null),
     providers: [
-      ...(fallback.configured ? [{ id: 'env', name: 'Environment (.env)', baseUrl: fallbackUrl, model: fallback.model, hasKey: true }] : []),
-      ...settings.providers.map(({ id, name, baseUrl, model, credential }) => ({ id, name, baseUrl, model, hasKey: Boolean(credential) })),
+      ...(fallback.configured ? [{ id: 'env', name: 'Environment (.env)', baseUrl: fallbackUrl, model: fallback.model, hasKey: true,
+        freeFallback: isOpenRouter(env.AI_BASE_URL) && env.AI_FREE_FALLBACK?.trim().toLowerCase() !== 'false' }] : []),
+      ...settings.providers.map(({ id, name, baseUrl, model, credential, freeFallback }) => ({ id, name, baseUrl, model,
+        hasKey: Boolean(credential), freeFallback: isOpenRouter(baseUrl) && freeFallback !== false })),
     ],
   };
 }
@@ -86,11 +89,12 @@ export async function activeProviderEnv(settings, env = process.env, secretPath 
   if (!active) return env;
   return { ...env, AI_BASE_URL: active.baseUrl, AI_MODEL: active.model,
     AI_API_KEY: active.credential ? await decrypt(active.credential, secretPath) : 'local-no-key',
-    AI_LOCAL_NO_KEY: active.credential ? 'false' : 'true' };
+    AI_LOCAL_NO_KEY: active.credential ? 'false' : 'true',
+    AI_FREE_FALLBACK: isOpenRouter(active.baseUrl) && active.freeFallback !== false ? 'true' : 'false' };
 }
 
 export async function saveProvider(settings, input, path = settingsFile, secretPath = keyFile) {
-  const { name, baseUrl, model, apiKey } = input || {};
+  const { name, baseUrl, model, apiKey, freeFallback } = input || {};
   if (typeof name !== 'string' || !name.trim() || name.length > 60
     || typeof baseUrl !== 'string' || baseUrl.length > 250
     || typeof model !== 'string' || !model.trim() || model.length > 160
@@ -100,10 +104,17 @@ export async function saveProvider(settings, input, path = settingsFile, secretP
   const local = ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname);
   if (!local && !apiKey.trim()) throw new Error('An API key is required for a remote provider.');
   const provider = { id: randomUUID(), name: name.trim(), baseUrl: baseUrl.trim().replace(/\/+$/, ''),
-    model: model.trim(), credential: apiKey.trim() ? await encrypt(apiKey.trim(), secretPath) : '' };
+    model: model.trim(), credential: apiKey.trim() ? await encrypt(apiKey.trim(), secretPath) : '',
+    freeFallback: isOpenRouter(baseUrl.trim()) && freeFallback !== false };
   const updated = { activeId: provider.id, providers: [...settings.providers, provider] };
   await saveProviderSettings(updated, path);
   return updated;
+}
+
+export function setProviderFallback(settings, id, enabled) {
+  const provider = settings.providers.find(item => item.id === id);
+  if (!provider || !isOpenRouter(provider.baseUrl) || typeof enabled !== 'boolean') throw new Error('OpenRouter provider not found or invalid fallback choice.');
+  return { ...settings, providers: settings.providers.map(item => item.id === id ? { ...item, freeFallback: enabled } : item) };
 }
 
 export function selectProvider(settings, id, env = process.env) {

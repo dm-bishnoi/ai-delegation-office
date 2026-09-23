@@ -192,6 +192,8 @@ footer { display: flex; padding: 40px 0 15px; color: #617074; font: 700 9px Manr
 .provider-form label span { font-weight: 400; color: #829390; }
 .provider-form input, .provider-form select { min-width: 0; width: 100%; border: 1px solid #415052; border-radius: 5px; background: #202a2d; color: #e4e9e1; padding: 10px 12px; font: 12px 'DM Sans', sans-serif; }
 .provider-form input::placeholder { color: #768885; }
+.provider-form .provider-checkbox { display: flex; align-items: start; gap: 9px; font-weight: 400; line-height: 1.5; }
+.provider-form .provider-checkbox input { width: auto; flex: none; margin-top: 2px; accent-color: #d7b989; }
 .provider-submit { background: #d7b989; border-color: #d7b989; color: #202727; justify-self: start; padding: 10px 14px; }
 .footer-right { margin-left: auto; }
 @media (max-width: 1050px) { .provider-layout { grid-template-columns: 1fr; } }

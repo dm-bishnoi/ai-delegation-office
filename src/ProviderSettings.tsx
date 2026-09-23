@@ -1,6 +1,6 @@
 import { useEffect, useState, type FormEvent } from 'react';
 
-type SavedProvider = { id: string; name: string; baseUrl: string; model: string; hasKey: boolean };
+type SavedProvider = { id: string; name: string; baseUrl: string; model: string; hasKey: boolean; freeFallback: boolean };
 type Settings = { activeId: string | null; providers: SavedProvider[] };
 type Preset = 'openrouter' | 'openai' | 'ollama' | 'custom';
 const presets: Record<Preset, { label: string; name: string; baseUrl: string; model: string }> = {
@@ -24,6 +24,7 @@ export default function ProviderSettings({ busy, onUpdate }: { busy: boolean; on
   const [baseUrl, setBaseUrl] = useState(presets.openrouter.baseUrl);
   const [model, setModel] = useState(presets.openrouter.model);
   const [apiKey, setApiKey] = useState('');
+  const [freeFallback, setFreeFallback] = useState(true);
   const [models, setModels] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -37,6 +38,7 @@ export default function ProviderSettings({ busy, onUpdate }: { busy: boolean; on
     setBaseUrl(presets[value].baseUrl);
     setModel(presets[value].model);
     setApiKey('');
+    setFreeFallback(value === 'openrouter');
     setModels([]);
     setError('');
     setStatus('');
@@ -55,7 +57,7 @@ export default function ProviderSettings({ busy, onUpdate }: { busy: boolean; on
 
   async function add(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (await change(() => request<Settings>('/api/providers', { name, baseUrl, model, apiKey }), 'Provider saved and selected. Run Test connection before creating a project.')) setApiKey('');
+    if (await change(() => request<Settings>('/api/providers', { name, baseUrl, model, apiKey, freeFallback }), 'Provider saved and selected. Run Test connection before creating a project.')) setApiKey('');
   }
 
   async function test(id: string) {
@@ -88,15 +90,16 @@ export default function ProviderSettings({ busy, onUpdate }: { busy: boolean; on
         <h2>Connected providers</h2>
         <p>Keys stay on the local Node server. An existing <code>.env</code> setup remains available.</p>
         {settings?.providers.map(item => <div className="provider-row" key={item.id}>
-          <div><strong>{item.name}</strong><small>{item.model} · {item.baseUrl}</small><span>{settings.activeId === item.id ? 'ACTIVE' : 'INACTIVE'}</span></div>
+          <div><strong>{item.name}</strong><small>{item.model} · {item.baseUrl}</small><span>{settings.activeId === item.id ? 'ACTIVE' : 'INACTIVE'}{item.baseUrl === presets.openrouter.baseUrl ? ` · FREE FALLBACK ${item.freeFallback ? 'ON' : 'OFF'}` : ''}</span></div>
           <div className="provider-actions">
             {settings.activeId !== item.id && <button disabled={busy || saving} onClick={() => void change(() => request<Settings>('/api/providers/select', { id: item.id }), 'Provider selected.')}>Use</button>}
             {settings.activeId === item.id && <button disabled={busy || saving} onClick={() => void test(item.id)}>Test connection</button>}
+            {item.id !== 'env' && item.baseUrl === presets.openrouter.baseUrl && <button disabled={busy || saving} onClick={() => void change(() => request<Settings>('/api/providers/fallback', { id: item.id, enabled: !item.freeFallback }), `Free-model fallback ${item.freeFallback ? 'disabled' : 'enabled'}.`)}>{item.freeFallback ? 'Disable fallback' : 'Enable fallback'}</button>}
             {item.id !== 'env' && <button disabled={busy || saving} onClick={() => void change(() => request<Settings>('/api/providers/remove', { id: item.id }), 'Provider removed.')} aria-label={`Remove ${item.name}`}>Remove</button>}
           </div>
         </div>)}
         {!settings?.providers.length && <p>No provider connected yet.</p>}
-        <p className="provider-hint">A connection test makes one small AI request and may count toward your provider's quota. OpenRouter free-model fallback remains available only while OpenRouter is selected.</p>
+        <p className="provider-hint">A connection test makes one small AI request and may count toward your provider's quota. A successful short test does not guarantee the model can return a complete website. Free fallback applies only to exact OpenRouter connections; account-wide limits can still block retries.</p>
       </div>
       <form className="provider-panel provider-form" onSubmit={event => void add(event)}>
         <h2>Add a provider</h2>
@@ -105,6 +108,7 @@ export default function ProviderSettings({ busy, onUpdate }: { busy: boolean; on
         <label>API base URL<input value={baseUrl} onChange={event => { setBaseUrl(event.target.value); setModels([]); }} placeholder="https://provider.example/v1" required maxLength={250} spellCheck={false} /></label>
         <label>Model ID<input list="available-models" value={model} onChange={event => setModel(event.target.value)} placeholder="Exact model identifier" required maxLength={160} spellCheck={false} /><datalist id="available-models">{models.map(id => <option key={id} value={id} />)}</datalist></label>
         <label>API key {preset === 'ollama' && <span>(optional for local models)</span>}<input type="password" autoComplete="off" value={apiKey} onChange={event => setApiKey(event.target.value)} required={preset !== 'ollama'} maxLength={500} placeholder="Stored only on your local server" /></label>
+        {baseUrl.replace(/\/+$/, '') === presets.openrouter.baseUrl && <label className="provider-checkbox"><input type="checkbox" checked={freeFallback} onChange={event => setFreeFallback(event.target.checked)} /> Try up to two verified free models after recoverable errors</label>}
         <button className="provider-model-button" type="button" onClick={() => void loadModels()} disabled={saving || busy || !baseUrl || (preset !== 'ollama' && !apiKey)}>Load model IDs</button>
         <button className="provider-submit" type="submit" disabled={saving || busy}>Save and select provider</button>
         <p className="provider-hint">Remote connections use HTTPS. Local Ollama accepts HTTP. Free models can have daily limits; choosing a paid provider may incur charges.</p>
