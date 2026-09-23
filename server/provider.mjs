@@ -161,7 +161,7 @@ export async function generateWebsite(workspace, options = {}) {
   const env = options.env || process.env;
   const fetchImpl = options.fetchImpl || fetch;
   const { value: content, model, attempts } = await withFreeFallback(async (model, maxTokens) => {
-    const request = model === env.AI_MODEL.trim() ? prompt : `${prompt}\n\nKeep the file compact enough to finish within 6000 output tokens. Prioritize a complete working page.`;
+    const request = model === env.AI_MODEL.trim() ? prompt : `${prompt}\n\nKeep the complete HTML within about ${Math.floor(maxTokens * 0.8)} output tokens. Use concise inline CSS and JavaScript; prioritize a finished, usable page over extra features.`;
     let html = (await completion(system, request, { env, fetchImpl, model, maxTokens })).trim();
     html = html.replace(/^```(?:html)?\s*\n/i, '').replace(/\n```\s*$/, '').trim();
     if (html.length > 100000 || !/^<!doctype html\s*>/i.test(html) || !/<head[\s>]/i.test(html)
@@ -169,6 +169,7 @@ export async function generateWebsite(workspace, options = {}) {
       throw providerError('The model did not return a complete standalone HTML file. Retry with a model that supports longer output.', true);
     }
     return html;
-  }, { env, fetchImpl, initialTokens: 5500, fallbackTokens: 8000, onAttempt: options.onAttempt, sleepImpl: options.sleepImpl });
+  }, { env, fetchImpl, initialTokens: 5500, fallbackTokens: 5500, minimumFallbackTokens: 4096,
+    onAttempt: options.onAttempt, sleepImpl: options.sleepImpl });
   return { kind: 'website', filename: 'index.html', content, model, attempts, createdAt: new Date().toISOString() };
 }

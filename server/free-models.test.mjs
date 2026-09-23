@@ -23,20 +23,22 @@ test('catalog only selects verified zero-price models with enough output capacit
   assert.deepEqual(eligibleFreeModels(models, 8000), ['good/large:free', 'good/medium:free']);
 });
 
-test('truncated website switches to at most two catalog-verified free models after delays', async () => {
+test('broken website response retries two verified free models within their output limits', async () => {
   const attempts = [];
   const delays = [];
   const progress = [];
   const fetchImpl = async (url, options) => {
     if (new URL(url).pathname.endsWith('/models')) {
       assert.equal(options.headers.Authorization, 'Bearer test-key');
-      return { ok: true, json: async () => ({ data: [model('bad/paid:free', 16000, { prompt: '0', completion: '1', request: '0' }), model('good/large:free'), model('good/medium:free', 8192)] }) };
+      return { ok: true, json: async () => ({ data: [model('bad/paid:free', 16000, { prompt: '0', completion: '1', request: '0' }), model('good/large:free', 6000), model('good/medium:free', 4096)] }) };
     }
     const request = JSON.parse(options.body);
     attempts.push(request.model);
-    assert.equal(request.max_tokens, attempts.length === 1 ? 5500 : 8000);
+    assert.equal(request.max_tokens, attempts.length === 3 ? 4096 : 5500);
+    if (attempts.length === 1) return { ok: true, headers: { get: () => 'application/json' },
+      text: async () => { throw Error('connection broke while reading body'); } };
     return { ok: attempts.length !== 2, status: attempts.length === 2 ? 429 : 200,
-      json: async () => ({ choices: [{ message: { content: attempts.length === 1 ? '<!doctype html><html>' : html }, finish_reason: attempts.length === 1 ? 'length' : 'stop' }] }) };
+      json: async () => ({ choices: [{ message: { content: html }, finish_reason: 'stop' }] }) };
   };
   const artifact = await generateWebsite(project(), { env, fetchImpl, sleepImpl: async ms => { delays.push(ms); }, onAttempt: status => progress.push(status) });
   assert.deepEqual(attempts, ['openrouter/free', 'good/large:free', 'good/medium:free']);

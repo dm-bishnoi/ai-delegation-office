@@ -32,10 +32,12 @@ export async function freeFallbackModels({ env, fetchImpl, minOutputTokens, excl
   try { payload = await response.json(); }
   catch { throw new Error('OpenRouter free-model catalog returned invalid JSON.'); }
   if (!Array.isArray(payload?.data)) throw new Error('OpenRouter free-model catalog returned no model list.');
-  return eligibleFreeModels(payload.data, minOutputTokens, excluded).slice(0, 2);
+  const eligible = eligibleFreeModels(payload.data, minOutputTokens, excluded).slice(0, 2);
+  return eligible.map(id => ({ id, maxTokens: Number(payload.data.find(model => model.id === id).top_provider.max_completion_tokens) }));
 }
 
-export async function withFreeFallback(run, { env, fetchImpl, initialTokens, fallbackTokens = initialTokens, onAttempt = () => {}, sleepImpl = wait }) {
+export async function withFreeFallback(run, { env, fetchImpl, initialTokens, fallbackTokens = initialTokens,
+  minimumFallbackTokens = fallbackTokens, onAttempt = () => {}, sleepImpl = wait }) {
   const firstModel = env.AI_MODEL?.trim();
   if (!firstModel) throw new Error('Set AI_MODEL in .env.');
   onAttempt({ model: firstModel, attempt: 1, total: 3, phase: 'running' });
@@ -43,17 +45,17 @@ export async function withFreeFallback(run, { env, fetchImpl, initialTokens, fal
   catch (firstError) {
     if (!firstError.retryable || !isOpenRouter(env.AI_BASE_URL?.trim()) || env.AI_FREE_FALLBACK?.trim().toLowerCase() === 'false') throw firstError;
     let models;
-    try { models = await freeFallbackModels({ env, fetchImpl, minOutputTokens: fallbackTokens, excluded: [firstModel] }); }
+    try { models = await freeFallbackModels({ env, fetchImpl, minOutputTokens: minimumFallbackTokens, excluded: [firstModel] }); }
     catch (error) { throw new Error(`${firstError.message} ${error.message}`); }
-    if (!models.length) throw new Error(`${firstError.message} No verified free model with enough output capacity is currently available.`);
+    if (!models.length) throw new Error(`${firstError.message} No verified free model supports at least ${minimumFallbackTokens} output tokens right now. Choose a model with more output capacity in AI connections or retry later.`);
     let lastError = firstError;
-    for (const [index, model] of models.entries()) {
+    for (const [index, { id: model, maxTokens }] of models.entries()) {
       const attempt = index + 2;
       const delayMs = attempt === 2 ? 3000 : 6000;
       onAttempt({ model, attempt, total: models.length + 1, phase: 'waiting', delayMs });
       await sleepImpl(delayMs);
       onAttempt({ model, attempt, total: models.length + 1, phase: 'running' });
-      try { return { value: await run(model, fallbackTokens), model, attempts: attempt }; }
+      try { return { value: await run(model, Math.min(fallbackTokens, maxTokens)), model, attempts: attempt }; }
       catch (error) {
         lastError = error;
         if (!error.retryable) throw error;
