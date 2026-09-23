@@ -12,13 +12,14 @@ if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('API_PO
 const dist = resolve(fileURLToPath(new URL('../dist/', import.meta.url)));
 let catalog = await loadStore();
 let busy = false;
+let operation = null;
 
 function activeProject() {
   return catalog.projects.find(project => project.id === catalog.activeProjectId) || null;
 }
 
 function snapshot() {
-  return { workspace: activeProject(), projects: projectSummaries(catalog), provider: providerInfo(), busy };
+  return { workspace: activeProject(), projects: projectSummaries(catalog), provider: providerInfo(), busy, operation };
 }
 
 function requireActive(projectId) {
@@ -112,6 +113,7 @@ const server = createServer(async (req, res) => {
         if (!project.tasks.length || project.tasks.some(task => task.status !== 'done')) {
           throw new ClientError(409, 'Finish and approve all assignments before building a website.');
         }
+        operation = { type: 'website', projectId: project.id };
         let artifact;
         try { artifact = await generateWebsite(project); }
         catch (cause) { throw new ClientError(502, cause instanceof Error ? cause.message : 'Could not generate website.'); }
@@ -139,7 +141,7 @@ const server = createServer(async (req, res) => {
         return json(res, 200, snapshot());
       }
       return json(res, 404, { error: 'Not found.' });
-    } finally { busy = false; }
+    } finally { busy = false; operation = null; }
   } catch (error) {
     const status = error instanceof ClientError ? error.status : 500;
     if (status === 500) console.error('API error:', error);
