@@ -41,17 +41,28 @@ async function completion(system, prompt, { env, fetchImpl, maxTokens }) {
   try {
     response = await fetchImpl(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${env.AI_API_KEY.trim()}` },
-      body: JSON.stringify({ model: env.AI_MODEL.trim(), messages: [{ role: 'system', content: system }, { role: 'user', content: prompt }], temperature: 0.3, max_tokens: maxTokens }),
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json', Authorization: `Bearer ${env.AI_API_KEY.trim()}` },
+      body: JSON.stringify({ model: env.AI_MODEL.trim(), messages: [{ role: 'system', content: system }, { role: 'user', content: prompt }], temperature: 0.3, max_tokens: maxTokens, stream: false }),
       signal: AbortSignal.timeout(maxTokens > 1200 ? 120000 : 60000),
     });
   } catch (error) {
     throw new Error(error?.name === 'TimeoutError' ? 'AI request timed out.' : 'Could not reach the configured AI provider.');
   }
-  if (!response.ok) throw new Error(`AI provider returned HTTP ${response.status}. Check the model and key.`);
+  if (!response.ok) {
+    const reason = response.status === 401 || response.status === 403 ? 'Check AI_API_KEY and provider permissions.'
+      : response.status === 404 ? 'Check AI_BASE_URL and AI_MODEL.'
+      : response.status === 429 ? 'Rate limit or quota reached. Wait and retry, or use another model.'
+      : response.status >= 500 ? 'The provider is unavailable. Try again later.'
+      : 'Check the model and provider settings.';
+    throw new Error(`AI provider returned HTTP ${response.status}. ${reason}`);
+  }
+  const contentType = response.headers?.get?.('content-type')?.toLowerCase() || '';
+  if (contentType.includes('text/event-stream')) throw new Error('AI provider returned a streaming response instead of JSON. Disable streaming in your gateway; the request sets stream=false.');
+  if (contentType.includes('text/html')) throw new Error('AI provider returned an HTML page instead of JSON. Check AI_BASE_URL points to an OpenAI-compatible API prefix.');
   let payload;
   try { payload = await response.json(); }
-  catch { throw new Error('AI provider returned invalid JSON.'); }
+  catch { throw new Error('AI provider returned an empty or malformed JSON response. Retry the request; if this keeps happening, check AI_BASE_URL and AI_MODEL.'); }
+  if (payload?.error) throw new Error('AI provider returned an error instead of a completion. Check AI_MODEL, quota, and provider logs.');
   const output = payload?.choices?.[0]?.message?.content;
   if (typeof output !== 'string' || !output.trim()) throw new Error('AI provider returned no text.');
   if (payload.choices[0].finish_reason === 'length') throw new Error('AI response was truncated. Try a model with a larger output limit.');

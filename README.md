@@ -50,6 +50,8 @@ npm run build
 
 Tests exercise approvals, revision context, project migration, failed-task recovery, provider URL validation, and website artifact persistence with mocked responses. A real provider call requires your own credentials and has not been validated by CI. Some free models may not allow enough output tokens for a complete website; the app reports an error and lets you retry without losing existing plans.
 
+If website generation reports an empty or malformed JSON response, the provider or gateway sent an invalid response even though the request asked for JSON. Try **Generate website prototype** again. If it repeats, check that `AI_BASE_URL` is the OpenAI-compatible API prefix (for OpenRouter, `https://openrouter.ai/api/v1`) and that `AI_MODEL` names a model that supports Chat Completions and sufficient output length. Responses labelled HTML or streaming now show a specific error. Failed generation keeps your four completed plans; it does not save a partial website. Do not share your API key when reporting an error.
+
 ## Scope and security
 
 - Multiple saved projects in one local workspace, bound to `127.0.0.1`. There is no login, multi-user isolation, hosted database, or deployment hardening. Do not expose the Node API to the public internet.
