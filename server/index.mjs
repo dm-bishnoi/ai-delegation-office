@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { ClientError, completeTask, decide, failTask, makeWorkspace, nextTask, retry } from './workflow.mjs';
 import { generate, generateWebsite, listModels, testConnection } from './provider.mjs';
 import { activeProviderEnv, activeProviderInfo, loadProviderSettings, publicProviderSettings,
-  removeProvider, saveProvider, saveProviderSettings, selectProvider } from './provider-settings.mjs';
+  removeProvider, saveProvider, saveProviderSettings, selectProvider, setProviderFallback } from './provider-settings.mjs';
 import { loadStore, projectSummaries, saveStore } from './store.mjs';
 
 const port = Number(process.env.API_PORT || 3001);
@@ -99,6 +99,12 @@ const server = createServer(async (req, res) => {
       if (pathname === '/api/providers/select') {
         try { providerSettings = selectProvider(providerSettings, body?.id); }
         catch (cause) { throw new ClientError(404, cause.message); }
+        await saveProviderSettings(providerSettings);
+        return json(res, 200, publicProviderSettings(providerSettings));
+      }
+      if (pathname === '/api/providers/fallback') {
+        try { providerSettings = setProviderFallback(providerSettings, body?.id, body?.enabled); }
+        catch (cause) { throw new ClientError(400, cause.message); }
         await saveProviderSettings(providerSettings);
         return json(res, 200, publicProviderSettings(providerSettings));
       }

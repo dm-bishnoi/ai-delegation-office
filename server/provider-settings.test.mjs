@@ -3,16 +3,16 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
-import { generate, listModels, testConnection } from './provider.mjs';
+import { generate, generateWebsite, listModels, testConnection } from './provider.mjs';
 import { makeWorkspace, nextTask } from './workflow.mjs';
 import { activeProviderEnv, activeProviderInfo, loadProviderSettings, publicProviderSettings,
-  removeProvider, saveProvider, selectProvider } from './provider-settings.mjs';
+  removeProvider, saveProvider, selectProvider, setProviderFallback } from './provider-settings.mjs';
 
 test('provider connection is encrypted, survives restart, and routes task requests', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'relay-providers-'));
   const file = join(dir, 'providers.json');
   const secret = join(dir, 'provider.key');
-  const fallback = { AI_BASE_URL: 'https://api.openai.com/v1', AI_MODEL: 'old-model', AI_API_KEY: 'env-key' };
+  const fallback = { AI_BASE_URL: 'https://api.openai.com/v1', AI_MODEL: 'old-model', AI_API_KEY: 'env-key', AI_FREE_FALLBACK: 'false' };
   try {
     let settings = await loadProviderSettings(file);
     settings = await saveProvider(settings, { name: 'OpenRouter', baseUrl: 'https://openrouter.ai/api/v1',
@@ -24,6 +24,7 @@ test('provider connection is encrypted, survives restart, and routes task reques
     assert.equal(activeProviderInfo(settings, fallback).model, 'test/free:free');
     const active = await activeProviderEnv(settings, fallback, secret);
     assert.equal(active.AI_API_KEY, 'private-test-key');
+    assert.equal(active.AI_FREE_FALLBACK, 'true');
     const workspace = makeWorkspace('Create a simple project.');
     let calls = 0;
     const fetchImpl = async (_url, options) => {
@@ -35,11 +36,27 @@ test('provider connection is encrypted, survives restart, and routes task reques
     assert.equal(await generate(workspace, nextTask(workspace), { env: active, fetchImpl }), 'Done.');
     assert.equal(calls, 1);
     assert.equal((await testConnection({ env: active, fetchImpl })).status, 'connected');
+    settings = setProviderFallback(settings, settings.providers[0].id, false);
+    assert.equal((await activeProviderEnv(settings, fallback, secret)).AI_FREE_FALLBACK, 'false');
+    settings = setProviderFallback(settings, settings.providers[0].id, true);
+    assert.equal((await activeProviderEnv(settings, fallback, secret)).AI_FREE_FALLBACK, 'true');
     settings = selectProvider(settings, 'env', fallback);
     assert.equal(activeProviderInfo(settings, fallback).model, 'old-model');
     settings = removeProvider(settings, settings.providers[0].id);
     assert.equal(settings.providers.length, 0);
   } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test('malformed provider JSON is diagnosed without exposing its response body', async () => {
+  const workspace = makeWorkspace('A small website.');
+  for (const task of workspace.tasks) { task.status = 'done'; task.output = 'Approved.'; }
+  const env = { AI_BASE_URL: 'https://api.example.com/v1', AI_MODEL: 'test-model', AI_API_KEY: 'test-key' };
+  await assert.rejects(generateWebsite(workspace, { env, fetchImpl: async () =>
+    new Response('{"private":"secret", "choices": [', { status: 200, headers: { 'content-type': 'application/json' } }) }), error => {
+    assert.match(error.message, /invalid JSON \(HTTP 200\)/);
+    assert.doesNotMatch(error.message, /secret/);
+    return true;
+  });
 });
 
 test('local model works without a key; remote provider rejects insecure URL or missing key', async () => {
