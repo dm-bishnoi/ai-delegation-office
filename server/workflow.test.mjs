@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { completeTask, decide, failTask, makeWorkspace, nextTask, retry } from './workflow.mjs';
-import { generate, providerEndpoint } from './provider.mjs';
+import { generate, generateWebsite, providerEndpoint } from './provider.mjs';
 import { loadStore, projectSummaries, saveStore } from './store.mjs';
 
 test('approval gates block downstream tasks and revision sends feedback to the provider', async () => {
@@ -66,4 +66,31 @@ test('legacy workspace migrates without losing data and interrupted tasks become
 test('provider refuses an insecure remote endpoint', () => {
   assert.throws(() => providerEndpoint('http://example.com/v1'), /HTTPS/);
   assert.equal(providerEndpoint('https://example.com/v1').pathname, '/v1/chat/completions');
+});
+
+test('website generation requires an approved project, validates full HTML, and persists code', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'relay-website-'));
+  const path = join(dir, 'projects.json');
+  const workspace = makeWorkspace('A portfolio website');
+  const env = { AI_BASE_URL: 'http://127.0.0.1:9999/v1', AI_API_KEY: 'test-key', AI_MODEL: 'test-model' };
+  const html = '<!doctype html><html><head><style>body{color:red}</style></head><body><h1>Portfolio</h1></body></html>';
+  const fetchImpl = async (_url, options) => {
+    const payload = JSON.parse(options.body);
+    assert.equal(payload.max_tokens, 5500);
+    assert.match(payload.messages[1].content, /portfolio website/i);
+    return { ok: true, json: async () => ({ choices: [{ message: { content: html }, finish_reason: 'stop' }] }) };
+  };
+  try {
+    await assert.rejects(generateWebsite(workspace, { env, fetchImpl }), /Finish and approve/);
+    for (const task of workspace.tasks) { task.status = 'done'; task.output = `Plan for ${task.title}`; }
+    const artifact = await generateWebsite(workspace, { env, fetchImpl });
+    assert.equal(artifact.filename, 'index.html');
+    assert.equal(artifact.content, html);
+    workspace.artifact = artifact;
+    await saveStore({ activeProjectId: workspace.id, projects: [workspace] }, path);
+    const restored = await loadStore(path, join(dir, 'legacy.json'));
+    assert.equal(restored.projects[0].artifact.content, html);
+    await assert.rejects(generateWebsite(workspace, { env, fetchImpl: async () => ({ ok: true, json: async () => ({ choices: [{ message: { content: html }, finish_reason: 'length' }] }) }) }), /truncated/);
+    await assert.rejects(generateWebsite(workspace, { env, fetchImpl: async () => ({ ok: true, json: async () => ({ choices: [{ message: { content: '<h1>partial</h1>' }, finish_reason: 'stop' }] }) }) }), /complete standalone/);
+  } finally { await rm(dir, { recursive: true, force: true }); }
 });

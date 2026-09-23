@@ -45,6 +45,7 @@ export default function App() {
   const [feedback, setFeedback] = useState<Record<number, string>>({});
   const [selected, setSelected] = useState<AgentId>('lead');
   const [view, setView] = useState<'board' | 'activity'>('board');
+  const [showPreview, setShowPreview] = useState(false);
   const current = workspace ?? empty;
 
   useEffect(() => {
@@ -119,7 +120,7 @@ export default function App() {
     if (!brief.trim() || busy) return;
     setAuto(false);
     if (await mutate('/api/projects', { brief })) {
-      setBrief(''); setFeedback({}); setSelected('lead');
+      setBrief(''); setFeedback({}); setSelected('lead'); setShowPreview(false);
     }
   }
 
@@ -134,7 +135,18 @@ export default function App() {
     if (await mutate(`/api/projects/${id}/select`, {})) {
       setSelected('lead');
       setFeedback({});
+      setShowPreview(false);
     }
+  }
+
+  function downloadWebsite() {
+    if (!workspace?.artifact) return;
+    const url = URL.createObjectURL(new Blob([workspace.artifact.content], { type: 'text/html;charset=utf-8' }));
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = workspace.artifact.filename;
+    link.click();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
 
   const selectedAgent = agents.find(agent => agent.id === selected)!;
@@ -179,7 +191,13 @@ export default function App() {
           <section className="progress-section"><div className="section-head"><div><p className="eyebrow">THE PROCESS</p><h2>{view === 'board' ? 'Work in motion' : 'Recent activity'}</h2></div><div className="section-actions"><span>{done} OF {current.tasks.length} COMPLETE</span><button onClick={() => void runStep()} disabled={!workspace || !provider.configured || busy || blocked || allDone || auto} title="Run one AI task"><Icon name="step" /> Step</button><button className="run-button" onClick={() => setAuto(value => !value)} disabled={!workspace || !provider.configured || blocked || allDone}><Icon name={auto ? 'pause' : 'play'} /> {auto ? 'Pause after task' : 'Run team'}</button></div></div>
             {view === 'board' ? <div className="task-board">{columns.filter(column => column.status !== 'failed' || current.tasks.some(task => task.status === 'failed')).map(column => <div key={column.status} className="task-column"><div className="column-heading"><span className={`column-indicator ${column.status}`} /> {column.label} <span className="column-count">{current.tasks.filter(task => task.status === column.status).length}</span></div><div className="column-body">{current.tasks.filter(task => task.status === column.status).map(task => <div className="task-card" key={task.id}><span className="task-id">TASK 0{task.id}</span><h3>{task.title}</h3><p>{task.description}</p><div className="task-owner"><AgentAvatar id={task.owner} small />{agents.find(agent => agent.id === task.owner)?.name}{task.requiresApproval && <span className="approval-symbol" title="Approval required">✳</span>}</div>{task.output && <details className="task-output" open={task.status === 'review'}><summary>Read {task.feedback ? 'previous draft' : 'deliverable'}</summary><pre>{task.output}</pre></details>}{task.error && <p className="task-error" role="alert">{task.error}</p>}{task.status === 'review' && <div className="review-actions"><label className="sr-only" htmlFor={`feedback-${task.id}`}>Revision feedback</label><textarea id={`feedback-${task.id}`} value={feedback[task.id] || ''} onChange={event => setFeedback(previous => ({ ...previous, [task.id]: event.target.value }))} maxLength={1000} placeholder="What should change? Required to revise." disabled={busy} /><button onClick={() => void decision(task, 'revise')} disabled={busy || !feedback[task.id]?.trim()}>Revise</button><button onClick={() => void decision(task, 'approve')} disabled={busy}>Approve</button></div>}{task.status === 'failed' && <button className="retry-button" onClick={() => void mutate(`/api/tasks/${task.id}/retry`, { projectId: workspace?.id })} disabled={busy}>Retry task</button>}</div>)}{!current.tasks.some(task => task.status === column.status) && <div className="empty-column">Nothing here yet</div>}</div></div>)}</div> : <div className="activity-list">{current.activity.map(entry => <div className="activity-row" key={entry.id}><AgentAvatar id={entry.agent} small /><span><strong>{agents.find(agent => agent.id === entry.agent)?.name}</strong> {entry.message}</span><time>{new Date(entry.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</time></div>)}{!current.activity.length && <div className="empty-column">No activity yet. Create a brief to begin.</div>}</div>}
           </section>
-          <footer>RELAY OFFICE <span>·</span> WRITTEN AI DELIVERABLES <span className="footer-right">LOCAL / 0.3</span></footer>
+          {workspace && <section className="deliverable-section" aria-labelledby="deliverable-title">
+            <div className="deliverable-head"><div><p className="eyebrow">YOUR OUTPUT</p><h2 id="deliverable-title">Project deliverables</h2></div><span>{workspace.artifact ? 'WEBSITE FILE READY' : allDone ? 'PLANS READY · WEBSITE NOT BUILT' : 'WORK IN PROGRESS'}</span></div>
+            <p>The four task cards above contain your team's written plans and review. Open each <strong>Read deliverable</strong> to see what was produced. {workspace.artifact ? 'Your website prototype is saved with this local project.' : 'Completing these tasks does not create website code. Generate a prototype after all four are approved.'}</p>
+            {allDone && !workspace.artifact && <button className="artifact-button" disabled={busy || !provider.configured} onClick={() => void mutate('/api/website', { projectId: workspace.id })}>{busy ? 'Building website…' : 'Generate website prototype'}</button>}
+            {workspace.artifact && <div className="artifact-result"><div className="artifact-toolbar"><strong>index.html</strong><div><button onClick={() => setShowPreview(value => !value)}>{showPreview ? 'Hide preview' : 'Preview website'}</button><button onClick={downloadWebsite}>Download code</button></div></div><p>One self-contained HTML file with CSS and optional JavaScript. Open the downloaded file in a browser or edit it in VS Code. This is an AI-generated draft; review the code before publishing it.</p>{showPreview && <iframe title="Website prototype preview" className="artifact-preview" sandbox="allow-scripts" referrerPolicy="no-referrer" srcDoc={workspace.artifact.content} />}<details className="artifact-source"><summary>View source code</summary><pre>{workspace.artifact.content}</pre></details></div>}
+          </section>}
+          <footer>RELAY OFFICE <span>·</span> WRITTEN PLANS &amp; WEBSITE PROTOTYPE <span className="footer-right">LOCAL / 0.4</span></footer>
         </div>
       </main>
     </div>

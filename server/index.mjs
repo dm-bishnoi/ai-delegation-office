@@ -4,7 +4,7 @@ import { readFile, stat } from 'node:fs/promises';
 import { extname, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ClientError, completeTask, decide, failTask, makeWorkspace, nextTask, retry } from './workflow.mjs';
-import { generate, providerInfo } from './provider.mjs';
+import { generate, generateWebsite, providerInfo } from './provider.mjs';
 import { loadStore, projectSummaries, saveStore } from './store.mjs';
 
 const port = Number(process.env.API_PORT || 3001);
@@ -101,6 +101,23 @@ const server = createServer(async (req, res) => {
         } catch (error) {
           failTask(project, task, error instanceof Error ? error.message : 'AI request failed.');
         }
+        touch(project);
+        await saveStore(catalog);
+        return json(res, 200, snapshot());
+      }
+      if (pathname === '/api/website') {
+        if (!providerInfo().configured) throw new ClientError(503, 'Configure the AI provider in .env first.');
+        const project = requireActive(body?.projectId);
+        if (project.artifact) throw new ClientError(409, 'Website already generated for this project.');
+        if (!project.tasks.length || project.tasks.some(task => task.status !== 'done')) {
+          throw new ClientError(409, 'Finish and approve all assignments before building a website.');
+        }
+        let artifact;
+        try { artifact = await generateWebsite(project); }
+        catch (cause) { throw new ClientError(502, cause instanceof Error ? cause.message : 'Could not generate website.'); }
+        project.artifact = artifact;
+        project.activity.unshift({ id: project.nextId++, agent: 'build', message: 'Website prototype is ready to preview and download.', time: artifact.createdAt });
+        project.activity = project.activity.slice(0, 100);
         touch(project);
         await saveStore(catalog);
         return json(res, 200, snapshot());
