@@ -63,8 +63,10 @@ export default function ProviderSettings({ busy, onUpdate }: { busy: boolean; on
   async function test(id: string) {
     setSaving(true); setError(''); setStatus('');
     try {
-      await request('/api/providers/test', { id });
-      setStatus('Connection works. The selected model returned an AI response.');
+      const result = await request<{ check: 'credentials' | 'generation'; freeRemaining?: number | null }>('/api/providers/test', { id });
+      setStatus(result.check === 'credentials'
+        ? `OpenRouter API key is valid.${result.freeRemaining === 0 ? ' No free requests remain today.' : ''} Model generation has not been tested.`
+        : 'Connection works. The selected model returned a short AI response.');
     } catch (cause) { setError(cause instanceof Error ? cause.message : 'Connection test failed.'); }
     finally { setSaving(false); }
   }
@@ -93,13 +95,13 @@ export default function ProviderSettings({ busy, onUpdate }: { busy: boolean; on
           <div><strong>{item.name}</strong><small>{item.model} · {item.baseUrl}</small><span>{settings.activeId === item.id ? 'ACTIVE' : 'INACTIVE'}{item.baseUrl === presets.openrouter.baseUrl ? ` · FREE FALLBACK ${item.freeFallback ? 'ON' : 'OFF'}` : ''}</span></div>
           <div className="provider-actions">
             {settings.activeId !== item.id && <button disabled={busy || saving} onClick={() => void change(() => request<Settings>('/api/providers/select', { id: item.id }), 'Provider selected.')}>Use</button>}
-            {settings.activeId === item.id && <button disabled={busy || saving} onClick={() => void test(item.id)}>Test connection</button>}
+            {settings.activeId === item.id && <button disabled={busy || saving} onClick={() => void test(item.id)}>{item.baseUrl === presets.openrouter.baseUrl ? 'Check API key' : 'Test connection'}</button>}
             {item.id !== 'env' && item.baseUrl === presets.openrouter.baseUrl && <button disabled={busy || saving} onClick={() => void change(() => request<Settings>('/api/providers/fallback', { id: item.id, enabled: !item.freeFallback }), `Free-model fallback ${item.freeFallback ? 'disabled' : 'enabled'}.`)}>{item.freeFallback ? 'Disable fallback' : 'Enable fallback'}</button>}
             {item.id !== 'env' && <button disabled={busy || saving} onClick={() => void change(() => request<Settings>('/api/providers/remove', { id: item.id }), 'Provider removed.')} aria-label={`Remove ${item.name}`}>Remove</button>}
           </div>
         </div>)}
         {!settings?.providers.length && <p>No provider connected yet.</p>}
-        <p className="provider-hint">A connection test makes one small AI request and may count toward your provider's quota. A successful short test does not guarantee the model can return a complete website. Free fallback applies only to exact OpenRouter connections; account-wide limits can still block retries.</p>
+        <p className="provider-hint">OpenRouter's key check validates your key without running a model. Other providers use a short AI request that may count toward quota. Neither check guarantees that a model can return a complete website. Free fallback applies only to exact OpenRouter connections; account-wide limits can still block retries.</p>
       </div>
       <form className="provider-panel provider-form" onSubmit={event => void add(event)}>
         <h2>Add a provider</h2>
