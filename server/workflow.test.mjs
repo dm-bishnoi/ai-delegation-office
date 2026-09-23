@@ -112,4 +112,5 @@ test('provider explains invalid response types without exposing their body', asy
     return true;
   });
   await assert.rejects(generateWebsite(workspace, { env, fetchImpl: async () => broken('application/json', async () => ({}), 429) }), /Rate limit or quota/);
+  await assert.rejects(generateWebsite(workspace, { env, fetchImpl: async () => broken('application/json', async () => ({ error: { type: 'insufficient_quota' } }), 429) }), /billing and usage/);
 });
