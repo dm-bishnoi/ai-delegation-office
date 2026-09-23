@@ -8,6 +8,27 @@ function providerError(message, retryable = false) {
   return error;
 }
 
+const quotaCodes = new Set([
+  'insufficient_quota', 'credit_balance_exhausted', 'organization_usage_limit_exceeded',
+  'organization_spend_limit_exceeded', 'project_spend_limit_exceeded',
+]);
+
+async function providerFailure(response) {
+  let error;
+  try { ({ error } = await response.json()); }
+  catch { /* A gateway may return an empty or non-JSON error page. */ }
+  const identifiers = [error?.code, error?.type, error?.metadata?.error_type];
+  const exhausted = identifiers.some(code => typeof code === 'string' && quotaCodes.has(code));
+  const reason = response.status === 401 || response.status === 403 ? 'Check AI_API_KEY and provider permissions.'
+    : response.status === 404 ? 'Check AI_BASE_URL and AI_MODEL.'
+    : response.status === 429 && exhausted ? 'API credits or account spending limit exhausted. Check provider billing and usage; retrying or switching models will not restore access.'
+    : response.status === 429 ? 'Rate limit or quota reached. Check your provider usage and limits. If temporarily rate limited, wait before retrying.'
+    : response.status >= 500 ? 'The provider is unavailable. Try again later.'
+    : 'Check the model and provider settings.';
+  return providerError(`AI provider returned HTTP ${response.status}. ${reason}`,
+    (response.status === 429 && !exhausted) || response.status >= 500);
+}
+
 export function providerInfo(env = process.env) {
   const base = env.AI_BASE_URL?.trim();
   const model = env.AI_MODEL?.trim();
@@ -58,12 +79,7 @@ async function completion(system, prompt, { env, fetchImpl, model, maxTokens }) 
     throw providerError(error?.name === 'TimeoutError' ? 'AI request timed out.' : 'Could not reach the configured AI provider.', true);
   }
   if (!response.ok) {
-    const reason = response.status === 401 || response.status === 403 ? 'Check AI_API_KEY and provider permissions.'
-      : response.status === 404 ? 'Check AI_BASE_URL and AI_MODEL.'
-      : response.status === 429 ? 'Rate limit or quota reached. Wait and retry, or use another model.'
-      : response.status >= 500 ? 'The provider is unavailable. Try again later.'
-      : 'Check the model and provider settings.';
-    throw providerError(`AI provider returned HTTP ${response.status}. ${reason}`, response.status === 429 || response.status >= 500);
+    throw await providerFailure(response);
   }
   const contentType = response.headers?.get?.('content-type')?.toLowerCase() || '';
   if (contentType.includes('text/event-stream')) throw new Error('AI provider returned a streaming response instead of JSON. Disable streaming in your gateway; the request sets stream=false.');

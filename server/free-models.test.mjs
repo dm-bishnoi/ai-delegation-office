@@ -60,3 +60,19 @@ test('fallback stops when disabled or when no verified free model is available',
   await assert.rejects(generateWebsite(project(), { env, fetchImpl }), /No verified free model/);
   assert.equal(catalogCalls, 1);
 });
+
+test('known account quota errors do not trigger free-model fallback or expose provider text', async () => {
+  let catalogCalls = 0;
+  const fetchImpl = async url => {
+    if (new URL(url).pathname.endsWith('/models')) catalogCalls++;
+    return { ok: false, status: 429, json: async () => ({
+      error: { code: 'insufficient_quota', message: 'secret provider diagnostic' },
+    }) };
+  };
+  await assert.rejects(generateWebsite(project(), { env, fetchImpl }), error => {
+    assert.match(error.message, /credits or account spending limit exhausted/);
+    assert.doesNotMatch(error.message, /secret provider diagnostic/);
+    return true;
+  });
+  assert.equal(catalogCalls, 0);
+});
