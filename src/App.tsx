@@ -3,7 +3,8 @@ import OfficeScene from './OfficeScene';
 import { agents, type AgentId, type ProjectSummary, type Task, type TaskStatus, type Workspace } from './workflow';
 
 type Provider = { configured: boolean; model: string | null };
-type Snapshot = { workspace: Workspace | null; projects: ProjectSummary[]; provider: Provider; busy: boolean };
+type Operation = { type: 'website'; projectId: string } | null;
+type Snapshot = { workspace: Workspace | null; projects: ProjectSummary[]; provider: Provider; busy: boolean; operation: Operation };
 const empty: Workspace = { brief: '', tasks: [], activity: [], running: false, nextId: 1 };
 const columns: { status: TaskStatus; label: string }[] = [
   { status: 'queued', label: 'Queue' }, { status: 'active', label: 'In progress' },
@@ -39,6 +40,7 @@ export default function App() {
   const [provider, setProvider] = useState<Provider>({ configured: false, model: null });
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [operation, setOperation] = useState<Operation>(null);
   const [auto, setAuto] = useState(false);
   const [error, setError] = useState('');
   const [brief, setBrief] = useState('');
@@ -59,6 +61,7 @@ export default function App() {
         setProjects(snapshot.projects);
         setProvider(snapshot.provider);
         setBusy(snapshot.busy);
+        setOperation(snapshot.operation);
         if (snapshot.busy) timer = window.setTimeout(() => void refresh(), 1000);
       } catch (cause) {
         if (!cancelled) setError(cause instanceof Error ? cause.message : 'Could not connect to the local API.');
@@ -85,6 +88,7 @@ export default function App() {
       const result = await api<Snapshot>('/api/steps', { projectId: workspace.id });
       setWorkspace(result.workspace);
       setProjects(result.projects);
+      setOperation(result.operation);
       if (result.workspace?.tasks.some(task => task.status === 'failed' || task.status === 'review')) setAuto(false);
     } catch (cause) {
       setAuto(false);
@@ -113,6 +117,14 @@ export default function App() {
       setError(cause instanceof Error ? cause.message : 'Request failed.');
       return false;
     } finally { setBusy(false); }
+  }
+
+  async function buildWebsite() {
+    if (!workspace?.id || busy) return;
+    setSelected('build');
+    setOperation({ type: 'website', projectId: workspace.id });
+    try { await mutate('/api/website', { projectId: workspace.id }); }
+    finally { setOperation(null); }
   }
 
   async function submit(event: FormEvent<HTMLFormElement>) {
@@ -152,6 +164,7 @@ export default function App() {
   const selectedAgent = agents.find(agent => agent.id === selected)!;
   const selectedTask = current.tasks.find(task => task.owner === selected);
   const recent = current.activity.find(entry => entry.agent === selected);
+  const buildingWebsite = operation?.type === 'website' && operation.projectId === workspace?.id;
 
   return (
     <div className="app-shell">
@@ -169,7 +182,7 @@ export default function App() {
         <div className="side-label side-label-team">YOUR TEAM <span>04</span></div>
         <div className="side-team">{agents.map(agent => <button key={agent.id} className={`team-row ${selected === agent.id ? 'team-row-selected' : ''}`} onClick={() => setSelected(agent.id)}>
           <AgentAvatar id={agent.id} /><span className="team-name">{agent.name}<small>{agent.role}</small></span>
-          <span className={`status-dot ${current.tasks.some(task => task.owner === agent.id && task.status === 'active') ? 'busy' : ''}`} />
+          <span className={`status-dot ${current.tasks.some(task => task.owner === agent.id && task.status === 'active') || (agent.id === 'build' && buildingWebsite) ? 'busy' : ''}`} />
         </button>)}</div>
         <div className="side-bottom"><span className="pulse" /> {provider.configured ? 'AI PROVIDER READY' : 'AI SETUP REQUIRED'}<small>{provider.configured ? provider.model : 'Configure the API in your local .env'}</small></div>
       </aside>
@@ -182,8 +195,8 @@ export default function App() {
           {!provider.configured && !loading && <div className="notice" role="status">AI execution needs a server-side provider key. Copy <code>.env.example</code> to <code>.env</code>, fill in your provider values, then restart the app. You can create a brief now.</div>}
 
           <div className="workspace-grid">
-            <section className="scene-panel" aria-label="Interactive office preview"><div className="panel-top"><div><span className="live-icon">✦</span> THE OFFICE <span className="panel-sub">/ LIVE VIEW</span></div><span className="scene-badge"><span className="pulse" /> {busy ? 'WORKING' : blocked ? 'ACTION NEEDED' : allDone ? 'COMPLETE' : 'TEAM READY'}</span></div><OfficeScene workspace={current} selected={selected} onSelect={setSelected} /><div className="scene-bottom"><span>CLICK AN AGENT TO INSPECT</span><span>ISOMETRIC VIEW <span className="corner-mark">⌗</span></span></div></section>
-            <aside className="inspector"><div className="inspector-heading"><span>AGENT INSPECTOR</span><span className="inspector-id">0{agents.findIndex(agent => agent.id === selected) + 1} / 04</span></div><div className="inspector-identity"><span className="inspector-avatar" style={{ '--avatar-color': selectedAgent.color } as CSSProperties}>{selectedAgent.initials}</span><div><h2>{selectedAgent.name}</h2><span>{selectedAgent.role}</span></div></div><div className="inspector-meta"><span>CURRENT STATUS</span><strong><span className="pulse" /> {selectedTask?.status ?? 'Standing by'}</strong></div><div className="inspector-section"><span className="section-kicker">ASSIGNMENT</span><p>{selectedTask?.description ?? 'Create a project brief to assign work.'}</p></div><div className="inspector-section recent"><span className="section-kicker">LATEST UPDATE</span><p>{recent?.message ?? 'Waiting for a task to begin.'}</p></div><div className="inspector-foot">{selectedTask?.output ? 'DELIVERABLE ON TASK BOARD' : 'SELECT AN AGENT IN THE OFFICE'} <span>↗</span></div></aside>
+            <section className="scene-panel" aria-label="Interactive office preview"><div className="panel-top"><div><span className="live-icon">✦</span> THE OFFICE <span className="panel-sub">/ LIVE VIEW</span></div><span className="scene-badge"><span className="pulse" /> {buildingWebsite ? 'ATLAS BUILDING WEBSITE' : busy ? 'WORKING' : blocked ? 'ACTION NEEDED' : allDone ? 'COMPLETE' : 'TEAM READY'}</span></div><OfficeScene workspace={current} websiteBuilding={buildingWebsite} selected={selected} onSelect={setSelected} /><div className="scene-bottom"><span>CLICK AN AGENT TO INSPECT</span><span>ISOMETRIC VIEW <span className="corner-mark">⌗</span></span></div></section>
+            <aside className="inspector"><div className="inspector-heading"><span>AGENT INSPECTOR</span><span className="inspector-id">0{agents.findIndex(agent => agent.id === selected) + 1} / 04</span></div><div className="inspector-identity"><span className="inspector-avatar" style={{ '--avatar-color': selectedAgent.color } as CSSProperties}>{selectedAgent.initials}</span><div><h2>{selectedAgent.name}</h2><span>{selectedAgent.role}</span></div></div><div className="inspector-meta"><span>CURRENT STATUS</span><strong><span className="pulse" /> {selected === 'build' && buildingWebsite ? 'Building website' : selectedTask?.status ?? 'Standing by'}</strong></div><div className="inspector-section"><span className="section-kicker">ASSIGNMENT</span><p>{selected === 'build' && buildingWebsite ? 'Generating a standalone website prototype from the approved project plans.' : selectedTask?.description ?? 'Create a project brief to assign work.'}</p></div><div className="inspector-section recent"><span className="section-kicker">LATEST UPDATE</span><p>{recent?.message ?? 'Waiting for a task to begin.'}</p></div><div className="inspector-foot">{selectedTask?.output ? 'DELIVERABLE ON TASK BOARD' : 'SELECT AN AGENT IN THE OFFICE'} <span>↗</span></div></aside>
           </div>
 
           <section className="brief-card"><div className="brief-heading"><span className="brief-asterisk">✳</span><div><h2>Start with a brief</h2><p>Describe what you want your team to explore.</p></div></div><form onSubmit={submit} className="brief-form"><label className="sr-only" htmlFor="brief">Project brief</label><input id="brief" value={brief} onChange={event => setBrief(event.target.value)} placeholder="e.g. Plan a launch campaign for a new product..." maxLength={500} /><button type="submit" disabled={!brief.trim() || busy}>Start project <Icon name="arrow" /></button></form><div className="brief-note"><strong>Current brief:</strong> {current.brief || 'No project yet.'} <span>· A new brief creates another saved project.</span></div></section>
@@ -194,10 +207,10 @@ export default function App() {
           {workspace && <section className="deliverable-section" aria-labelledby="deliverable-title">
             <div className="deliverable-head"><div><p className="eyebrow">YOUR OUTPUT</p><h2 id="deliverable-title">Project deliverables</h2></div><span>{workspace.artifact ? 'WEBSITE FILE READY' : allDone ? 'PLANS READY · WEBSITE NOT BUILT' : 'WORK IN PROGRESS'}</span></div>
             <p>The four task cards above contain your team's written plans and review. Open each <strong>Read deliverable</strong> to see what was produced. {workspace.artifact ? 'Your website prototype is saved with this local project.' : 'Completing these tasks does not create website code. Generate a prototype after all four are approved.'}</p>
-            {allDone && !workspace.artifact && <button className="artifact-button" disabled={busy || !provider.configured} onClick={() => void mutate('/api/website', { projectId: workspace.id })}>{busy ? 'Building website…' : 'Generate website prototype'}</button>}
+            {allDone && !workspace.artifact && <button className="artifact-button" disabled={busy || !provider.configured} onClick={() => void buildWebsite()}>{buildingWebsite ? 'Building website…' : 'Generate website prototype'}</button>}
             {workspace.artifact && <div className="artifact-result"><div className="artifact-toolbar"><strong>index.html</strong><div><button onClick={() => setShowPreview(value => !value)}>{showPreview ? 'Hide preview' : 'Preview website'}</button><button onClick={downloadWebsite}>Download code</button></div></div><p>One self-contained HTML file with CSS and optional JavaScript. Open the downloaded file in a browser or edit it in VS Code. This is an AI-generated draft; review the code before publishing it.</p>{showPreview && <iframe title="Website prototype preview" className="artifact-preview" sandbox="allow-scripts" referrerPolicy="no-referrer" srcDoc={workspace.artifact.content} />}<details className="artifact-source"><summary>View source code</summary><pre>{workspace.artifact.content}</pre></details></div>}
           </section>}
-          <footer>RELAY OFFICE <span>·</span> WRITTEN PLANS &amp; WEBSITE PROTOTYPE <span className="footer-right">LOCAL / 0.4</span></footer>
+          <footer>RELAY OFFICE <span>·</span> WRITTEN PLANS &amp; WEBSITE PROTOTYPE <span className="footer-right">LOCAL / 0.4.1</span></footer>
         </div>
       </main>
     </div>

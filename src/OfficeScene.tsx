@@ -4,16 +4,17 @@ import { agents, type AgentId, type Workspace } from './workflow';
 
 interface Props {
   workspace: Workspace;
+  websiteBuilding: boolean;
   selected: AgentId;
   onSelect: (agent: AgentId) => void;
 }
 
 const positions: [number, number][] = [[-2.5, -1.55], [2.5, -1.55], [-2.5, 1.55], [2.5, 1.55]];
 
-export default function OfficeScene({ workspace, selected, onSelect }: Props) {
+export default function OfficeScene({ workspace, websiteBuilding, selected, onSelect }: Props) {
   const mount = useRef<HTMLDivElement>(null);
-  const data = useRef({ workspace, selected, onSelect });
-  data.current = { workspace, selected, onSelect };
+  const data = useRef({ workspace, websiteBuilding, selected, onSelect });
+  data.current = { workspace, websiteBuilding, selected, onSelect };
 
   useEffect(() => {
     const container = mount.current;
@@ -52,7 +53,6 @@ export default function OfficeScene({ workspace, selected, onSelect }: Props) {
     const floorMat = material('#46534f');
     const deskMat = material('#a78664');
     const metalMat = material('#262e30', 0.45);
-    const monitorMat = new THREE.MeshStandardMaterial({ color: '#1c363b', emissive: '#214e52', emissiveIntensity: 0.6, roughness: 0.3 });
     const wallMat = material('#303b3a');
     const geometries: THREE.BufferGeometry[] = [];
     const textures: THREE.Texture[] = [];
@@ -88,6 +88,9 @@ export default function OfficeScene({ workspace, selected, onSelect }: Props) {
     const avatarMeshes: THREE.Group[] = [];
     const accentMaterials: THREE.MeshStandardMaterial[] = [];
     const haloMaterials: THREE.MeshBasicMaterial[] = [];
+    const monitorMaterials: THREE.MeshStandardMaterial[] = [];
+    const typingArms: [THREE.Group, THREE.Group][] = [];
+    const workLabels: THREE.Sprite[] = [];
     agents.forEach((agent, index) => {
       const [x, z] = positions[index];
       const deskZ = z - 0.5;
@@ -96,6 +99,8 @@ export default function OfficeScene({ workspace, selected, onSelect }: Props) {
         box(0.08, 0.75, 0.08, metalMat, x + dx, 0.4, deskZ - 0.42);
         box(0.08, 0.75, 0.08, metalMat, x + dx, 0.4, deskZ + 0.42);
       }
+      const monitorMat = new THREE.MeshStandardMaterial({ color: '#1c363b', emissive: '#214e52', emissiveIntensity: 0.6, roughness: 0.3 });
+      monitorMaterials.push(monitorMat);
       box(0.72, 0.48, 0.06, monitorMat, x, 1.18, deskZ - 0.14);
       box(0.08, 0.18, 0.07, metalMat, x, 0.91, deskZ - 0.14);
       box(0.66, 0.04, 0.25, material('#333d3a'), x, 0.89, deskZ + 0.28);
@@ -112,6 +117,19 @@ export default function OfficeScene({ workspace, selected, onSelect }: Props) {
       const body = new THREE.Mesh(bodyGeometry, accent);
       body.position.y = 0.46;
       group.add(body);
+      const arms: THREE.Group[] = [];
+      for (const side of [-1, 1]) {
+        const shoulder = new THREE.Group();
+        shoulder.position.set(side * 0.31, 0.71, 0);
+        const armGeometry = new THREE.BoxGeometry(0.1, 0.34, 0.12);
+        geometries.push(armGeometry);
+        const arm = new THREE.Mesh(armGeometry, accent);
+        arm.position.y = -0.16;
+        shoulder.add(arm);
+        group.add(shoulder);
+        arms.push(shoulder);
+      }
+      typingArms.push(arms as [THREE.Group, THREE.Group]);
       const headGeometry = new THREE.SphereGeometry(0.26, 18, 12);
       geometries.push(headGeometry);
       const head = new THREE.Mesh(headGeometry, material('#e6c9ad'));
@@ -143,6 +161,25 @@ export default function OfficeScene({ workspace, selected, onSelect }: Props) {
         label.position.y = 1.53;
         label.scale.set(1.55, 0.39, 1);
         group.add(label);
+      }
+      const workCanvas = document.createElement('canvas');
+      workCanvas.width = 256;
+      workCanvas.height = 48;
+      const workContext = workCanvas.getContext('2d');
+      if (workContext) {
+        workContext.fillStyle = '#443a28';
+        workContext.fillRect(0, 0, 256, 48);
+        workContext.fillStyle = '#f7dda8';
+        workContext.font = 'bold 23px sans-serif';
+        workContext.fillText('WORKING', 58, 32);
+        const workTexture = new THREE.CanvasTexture(workCanvas);
+        textures.push(workTexture);
+        const label = new THREE.Sprite(new THREE.SpriteMaterial({ map: workTexture, transparent: true, depthTest: false }));
+        label.position.y = 1.92;
+        label.scale.set(1.35, 0.25, 1);
+        label.visible = false;
+        group.add(label);
+        workLabels.push(label);
       }
       scene.add(group);
       avatarMeshes.push(group);
@@ -219,7 +256,7 @@ export default function OfficeScene({ workspace, selected, onSelect }: Props) {
       const t = clock.elapsedTime;
       agents.forEach((agent, index) => {
         const task = data.current.workspace.tasks.find(item => item.owner === agent.id);
-        const status = task?.status ?? 'queued';
+        const status = agent.id === 'build' && data.current.websiteBuilding ? 'active' : task?.status ?? 'queued';
         const [deskX, deskZ] = positions[index];
         const targetX = status === 'review' ? (index % 2 ? 1.15 : -1.15) : status === 'active' ? deskX : deskX + 0.62;
         const targetZ = status === 'review' ? (index < 2 ? -0.65 : 0.95) : status === 'active' ? deskZ + 0.33 : deskZ + 0.73;
@@ -228,6 +265,11 @@ export default function OfficeScene({ workspace, selected, onSelect }: Props) {
         avatar.position.x = THREE.MathUtils.lerp(avatar.position.x, targetX, easing);
         avatar.position.z = THREE.MathUtils.lerp(avatar.position.z, targetZ, easing);
         avatar.position.y = reduceMotion ? 0 : status === 'active' ? Math.sin(t * 3 + index) * 0.035 : Math.sin(t * 1.4 + index) * 0.01;
+        const [leftArm, rightArm] = typingArms[index];
+        leftArm.rotation.x = status === 'active' && !reduceMotion ? -0.65 + Math.sin(t * 9) * 0.2 : 0;
+        rightArm.rotation.x = status === 'active' && !reduceMotion ? -0.65 + Math.sin(t * 9 + Math.PI) * 0.2 : 0;
+        monitorMaterials[index].emissiveIntensity = status === 'active' && !reduceMotion ? 1.5 + Math.sin(t * 5) * 0.45 : 0.6;
+        if (workLabels[index]) workLabels[index].visible = status === 'active';
         const ring = haloMaterials[index];
         ring.color.set(status === 'failed' ? '#db8276' : status === 'review' ? '#c4a2e2' : status === 'active' ? '#e6c782' : agent.color);
         ring.opacity = status === 'active' && !reduceMotion ? 0.6 + Math.sin(t * 4) * 0.25 : 0.78;
