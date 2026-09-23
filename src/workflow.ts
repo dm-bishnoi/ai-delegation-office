@@ -37,7 +37,7 @@ export interface Workspace {
   activity: Entry[];
   nextId: number;
   running?: boolean;
-  artifact?: { kind: 'website'; filename: string; content: string; createdAt: string };
+  artifact?: { kind: 'website'; filename: string; content: string; createdAt: string; model?: string; attempts?: number };
 }
 
 export interface ProjectSummary {

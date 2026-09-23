@@ -21,7 +21,7 @@ AI_API_KEY=your-private-key
 
 OpenRouter, a self-hosted OpenAI-compatible gateway, or another provider exposing `POST /chat/completions` with `choices[0].message.content` can work. Set `AI_BASE_URL` to the prefix **before** `/chat/completions`. For a local provider, `http://127.0.0.1` or `http://localhost` is accepted; remote providers must use HTTPS. Availability and model compatibility depend on your chosen provider. Never put a key in frontend code or commit `.env`.
 
-Each Step or automatic task sends your brief and relevant prior deliverables to the selected provider. Calls may consume quota or incur charges under that provider's terms.
+Each Step or automatic task sends your brief and relevant prior deliverables to the selected provider. Calls may consume quota or incur charges under that provider's terms. With OpenRouter (`AI_BASE_URL=https://openrouter.ai/api/v1`), a transient error or truncated response triggers at most two extra requests, after 3 and 6 seconds. The server fetches OpenRouter's current model catalog and only chooses `:free` models with zero prompt, completion, and request prices and enough listed output capacity. It never selects an unverified or paid fallback. Each attempted request may count against free-tier limits. Set `AI_FREE_FALLBACK=false` in `.env` to disable this; other OpenAI-compatible providers keep the single-model behavior.
 
 ```bash
 npm run dev
@@ -35,7 +35,7 @@ Visit Vite's displayed URL. The script runs the browser UI and the local Node AP
 2. Press **Step** for one AI response or **Run team** to continue automatically. The next agent sees approved earlier deliverables as context.
 3. Nova's strategy and Echo's final review stop for human approval. Read the deliverable, approve it, or enter specific revision feedback. Revision reruns that assignment.
 4. Provider errors leave the assignment in **Needs attention** with a retry button. Projects and activity history are saved in `data/projects.json` and restored after a restart. Existing `data/workspace.json` data from v0.2 is imported automatically and kept as a backup. An interrupted in-flight task becomes retryable.
-5. In **Project deliverables**, open each task's **Read deliverable** to see the plan. Once all four tasks are approved, click **Generate website prototype**. This makes one `index.html` containing HTML, CSS, and optional JavaScript. Use **Preview website**, **View source code**, or **Download code**. A project already completed on v0.3 can generate its prototype without rerunning the four tasks.
+5. In **Project deliverables**, open each task's **Read deliverable** to see the plan. Once all four tasks are approved, click **Generate website prototype**. This makes one `index.html` containing HTML, CSS, and optional JavaScript. Use **Preview website**, **View source code**, or **Download code**. The result shows which model generated it. A project already completed on v0.3 can generate its prototype without rerunning the four tasks.
 
 In the 3D scene, drag to orbit and scroll to zoom. Agents move to their desks when generating a task and to the shared review table while awaiting approval. During website generation, Atlas moves to the desk, shows a work label, and animates while the model responds. Their floor rings show active, review, and failed states. You can always select an agent from the sidebar if WebGL is unavailable.
 
@@ -48,7 +48,7 @@ npm test
 npm run build
 ```
 
-Tests exercise approvals, revision context, project migration, failed-task recovery, provider URL validation, and website artifact persistence with mocked responses. A real provider call requires your own credentials and has not been validated by CI. Some free models may not allow enough output tokens for a complete website; the app reports an error and lets you retry without losing existing plans.
+Tests exercise approvals, revision context, project migration, failed-task recovery, provider URL validation, website artifact persistence, and bounded free-model fallback with mocked responses. A real provider call requires your own credentials and has not been validated by CI. Some free models may not allow enough output tokens for a complete website; after fallback attempts are exhausted, the app reports an error and lets you retry without losing existing plans.
 
 If website generation reports an empty or malformed JSON response, the provider or gateway sent an invalid response even though the request asked for JSON. Try **Generate website prototype** again. If it repeats, check that `AI_BASE_URL` is the OpenAI-compatible API prefix (for OpenRouter, `https://openrouter.ai/api/v1`) and that `AI_MODEL` names a model that supports Chat Completions and sufficient output length. Responses labelled HTML or streaming now show a specific error. Failed generation keeps your four completed plans; it does not save a partial website. Do not share your API key when reporting an error.
 

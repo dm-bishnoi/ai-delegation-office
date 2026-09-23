@@ -97,7 +97,7 @@ const server = createServer(async (req, res) => {
         try {
           touch(project);
           await saveStore(catalog);
-          const output = await generate(project, task);
+          const output = await generate(project, task, { onAttempt: progress => { operation = { type: 'task', projectId: project.id, ...progress }; } });
           completeTask(project, task, output);
         } catch (error) {
           failTask(project, task, error instanceof Error ? error.message : 'AI request failed.');
@@ -115,7 +115,7 @@ const server = createServer(async (req, res) => {
         }
         operation = { type: 'website', projectId: project.id };
         let artifact;
-        try { artifact = await generateWebsite(project); }
+        try { artifact = await generateWebsite(project, { onAttempt: progress => { operation = { type: 'website', projectId: project.id, ...progress }; } }); }
         catch (cause) { throw new ClientError(502, cause instanceof Error ? cause.message : 'Could not generate website.'); }
         project.artifact = artifact;
         project.activity.unshift({ id: project.nextId++, agent: 'build', message: 'Website prototype is ready to preview and download.', time: artifact.createdAt });

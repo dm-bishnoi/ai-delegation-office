@@ -3,7 +3,7 @@ import OfficeScene from './OfficeScene';
 import { agents, type AgentId, type ProjectSummary, type Task, type TaskStatus, type Workspace } from './workflow';
 
 type Provider = { configured: boolean; model: string | null };
-type Operation = { type: 'website'; projectId: string } | null;
+type Operation = { type: 'website' | 'task'; projectId: string; model?: string; attempt?: number; total?: number; phase?: 'running' | 'waiting'; delayMs?: number } | null;
 type Snapshot = { workspace: Workspace | null; projects: ProjectSummary[]; provider: Provider; busy: boolean; operation: Operation };
 const empty: Workspace = { brief: '', tasks: [], activity: [], running: false, nextId: 1 };
 const columns: { status: TaskStatus; label: string }[] = [
@@ -123,8 +123,14 @@ export default function App() {
     if (!workspace?.id || busy) return;
     setSelected('build');
     setOperation({ type: 'website', projectId: workspace.id });
+    let finished = false;
+    const poll = window.setInterval(() => {
+      void api<Snapshot>('/api/workspace').then(snapshot => {
+        if (!finished && snapshot.workspace?.id === workspace.id) setOperation(snapshot.operation);
+      }).catch(() => { /* The build request reports connection errors. */ });
+    }, 800);
     try { await mutate('/api/website', { projectId: workspace.id }); }
-    finally { setOperation(null); }
+    finally { finished = true; window.clearInterval(poll); setOperation(null); }
   }
 
   async function submit(event: FormEvent<HTMLFormElement>) {
@@ -165,6 +171,7 @@ export default function App() {
   const selectedTask = current.tasks.find(task => task.owner === selected);
   const recent = current.activity.find(entry => entry.agent === selected);
   const buildingWebsite = operation?.type === 'website' && operation.projectId === workspace?.id;
+  const fallbackWaiting = buildingWebsite && operation?.phase === 'waiting';
 
   return (
     <div className="app-shell">
@@ -196,7 +203,7 @@ export default function App() {
 
           <div className="workspace-grid">
             <section className="scene-panel" aria-label="Interactive office preview"><div className="panel-top"><div><span className="live-icon">✦</span> THE OFFICE <span className="panel-sub">/ LIVE VIEW</span></div><span className="scene-badge"><span className="pulse" /> {buildingWebsite ? 'ATLAS BUILDING WEBSITE' : busy ? 'WORKING' : blocked ? 'ACTION NEEDED' : allDone ? 'COMPLETE' : 'TEAM READY'}</span></div><OfficeScene workspace={current} websiteBuilding={buildingWebsite} selected={selected} onSelect={setSelected} /><div className="scene-bottom"><span>CLICK AN AGENT TO INSPECT</span><span>ISOMETRIC VIEW <span className="corner-mark">⌗</span></span></div></section>
-            <aside className="inspector"><div className="inspector-heading"><span>AGENT INSPECTOR</span><span className="inspector-id">0{agents.findIndex(agent => agent.id === selected) + 1} / 04</span></div><div className="inspector-identity"><span className="inspector-avatar" style={{ '--avatar-color': selectedAgent.color } as CSSProperties}>{selectedAgent.initials}</span><div><h2>{selectedAgent.name}</h2><span>{selectedAgent.role}</span></div></div><div className="inspector-meta"><span>CURRENT STATUS</span><strong><span className="pulse" /> {selected === 'build' && buildingWebsite ? 'Building website' : selectedTask?.status ?? 'Standing by'}</strong></div><div className="inspector-section"><span className="section-kicker">ASSIGNMENT</span><p>{selected === 'build' && buildingWebsite ? 'Generating a standalone website prototype from the approved project plans.' : selectedTask?.description ?? 'Create a project brief to assign work.'}</p></div><div className="inspector-section recent"><span className="section-kicker">LATEST UPDATE</span><p>{recent?.message ?? 'Waiting for a task to begin.'}</p></div><div className="inspector-foot">{selectedTask?.output ? 'DELIVERABLE ON TASK BOARD' : 'SELECT AN AGENT IN THE OFFICE'} <span>↗</span></div></aside>
+            <aside className="inspector"><div className="inspector-heading"><span>AGENT INSPECTOR</span><span className="inspector-id">0{agents.findIndex(agent => agent.id === selected) + 1} / 04</span></div><div className="inspector-identity"><span className="inspector-avatar" style={{ '--avatar-color': selectedAgent.color } as CSSProperties}>{selectedAgent.initials}</span><div><h2>{selectedAgent.name}</h2><span>{selectedAgent.role}</span></div></div><div className="inspector-meta"><span>CURRENT STATUS</span><strong><span className="pulse" /> {selected === 'build' && buildingWebsite ? fallbackWaiting ? 'Switching free model' : 'Building website' : selectedTask?.status ?? 'Standing by'}</strong></div><div className="inspector-section"><span className="section-kicker">ASSIGNMENT</span><p>{selected === 'build' && buildingWebsite ? 'Generating a standalone website prototype from the approved project plans.' : selectedTask?.description ?? 'Create a project brief to assign work.'}</p></div><div className="inspector-section recent"><span className="section-kicker">LATEST UPDATE</span><p>{selected === 'build' && buildingWebsite && operation?.model ? `${fallbackWaiting ? 'Waiting before retrying' : 'Using'} ${operation.model} · attempt ${operation.attempt}/${operation.total}.` : recent?.message ?? 'Waiting for a task to begin.'}</p></div><div className="inspector-foot">{selectedTask?.output ? 'DELIVERABLE ON TASK BOARD' : 'SELECT AN AGENT IN THE OFFICE'} <span>↗</span></div></aside>
           </div>
 
           <section className="brief-card"><div className="brief-heading"><span className="brief-asterisk">✳</span><div><h2>Start with a brief</h2><p>Describe what you want your team to explore.</p></div></div><form onSubmit={submit} className="brief-form"><label className="sr-only" htmlFor="brief">Project brief</label><input id="brief" value={brief} onChange={event => setBrief(event.target.value)} placeholder="e.g. Plan a launch campaign for a new product..." maxLength={500} /><button type="submit" disabled={!brief.trim() || busy}>Start project <Icon name="arrow" /></button></form><div className="brief-note"><strong>Current brief:</strong> {current.brief || 'No project yet.'} <span>· A new brief creates another saved project.</span></div></section>
@@ -207,10 +214,10 @@ export default function App() {
           {workspace && <section className="deliverable-section" aria-labelledby="deliverable-title">
             <div className="deliverable-head"><div><p className="eyebrow">YOUR OUTPUT</p><h2 id="deliverable-title">Project deliverables</h2></div><span>{workspace.artifact ? 'WEBSITE FILE READY' : allDone ? 'PLANS READY · WEBSITE NOT BUILT' : 'WORK IN PROGRESS'}</span></div>
             <p>The four task cards above contain your team's written plans and review. Open each <strong>Read deliverable</strong> to see what was produced. {workspace.artifact ? 'Your website prototype is saved with this local project.' : 'Completing these tasks does not create website code. Generate a prototype after all four are approved.'}</p>
-            {allDone && !workspace.artifact && <button className="artifact-button" disabled={busy || !provider.configured} onClick={() => void buildWebsite()}>{buildingWebsite ? 'Building website…' : 'Generate website prototype'}</button>}
-            {workspace.artifact && <div className="artifact-result"><div className="artifact-toolbar"><strong>index.html</strong><div><button onClick={() => setShowPreview(value => !value)}>{showPreview ? 'Hide preview' : 'Preview website'}</button><button onClick={downloadWebsite}>Download code</button></div></div><p>One self-contained HTML file with CSS and optional JavaScript. Open the downloaded file in a browser or edit it in VS Code. This is an AI-generated draft; review the code before publishing it.</p>{showPreview && <iframe title="Website prototype preview" className="artifact-preview" sandbox="allow-scripts" referrerPolicy="no-referrer" srcDoc={workspace.artifact.content} />}<details className="artifact-source"><summary>View source code</summary><pre>{workspace.artifact.content}</pre></details></div>}
+            {allDone && !workspace.artifact && <button className="artifact-button" disabled={busy || !provider.configured} onClick={() => void buildWebsite()}>{fallbackWaiting ? 'Waiting for free model…' : buildingWebsite ? `Building website${operation?.attempt && operation.attempt > 1 ? ` · model ${operation.attempt}/${operation.total}` : ''}…` : 'Generate website prototype'}</button>}
+            {workspace.artifact && <div className="artifact-result"><div className="artifact-toolbar"><strong>index.html</strong><div><button onClick={() => setShowPreview(value => !value)}>{showPreview ? 'Hide preview' : 'Preview website'}</button><button onClick={downloadWebsite}>Download code</button></div></div><p>One self-contained HTML file with CSS and optional JavaScript. {workspace.artifact.model && <>Generated with {workspace.artifact.model} (attempt {workspace.artifact.attempts}). </>}Open the downloaded file in a browser or edit it in VS Code. This is an AI-generated draft; review the code before publishing it.</p>{showPreview && <iframe title="Website prototype preview" className="artifact-preview" sandbox="allow-scripts" referrerPolicy="no-referrer" srcDoc={workspace.artifact.content} />}<details className="artifact-source"><summary>View source code</summary><pre>{workspace.artifact.content}</pre></details></div>}
           </section>}
-          <footer>RELAY OFFICE <span>·</span> WRITTEN PLANS &amp; WEBSITE PROTOTYPE <span className="footer-right">LOCAL / 0.4.2</span></footer>
+          <footer>RELAY OFFICE <span>·</span> WRITTEN PLANS &amp; WEBSITE PROTOTYPE <span className="footer-right">LOCAL / 0.5</span></footer>
         </div>
       </main>
     </div>
