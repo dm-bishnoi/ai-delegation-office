@@ -108,6 +108,7 @@ export default function App() {
   const blocked = current.tasks.some(task => task.status === 'review' || task.status === 'failed');
   const done = current.tasks.filter(task => task.status === 'done').length;
   const allDone = Boolean(workspace) && done === current.tasks.length;
+  const websiteFailure = allDone && !workspace?.artifact && Boolean(workspace?.websiteError) && !busy;
   useEffect(() => {
     if (!auto || busy || blocked || allDone || !workspace) return;
     const timer = window.setTimeout(() => void runStep(), 550);
@@ -227,7 +228,7 @@ export default function App() {
             setProvider(snapshot.provider);
           }} /> : <>
           <div className="heading-row"><div><p className="eyebrow">YOUR COMMAND CENTER <span className="eyebrow-rule" /></p><h1>Where ideas <em>take shape.</em></h1><p className="intro">Give your team a direction. Review the written work each agent delivers.</p></div><span className="project-number">PROJECT / LOCAL <span>↗</span></span></div>
-          {error && <div className="notice error" role="alert">{error}</div>}
+          {(error || websiteFailure) && <div className="notice error" role="alert"><span>{error || workspace?.websiteError}</span>{websiteFailure && <button type="button" className="notice-retry" onClick={() => void buildWebsite()} disabled={!provider.configured}>Retry website{workspace?.websiteDraft?.body ? ' from saved page' : ''}</button>}</div>}
           {operation?.phase === 'waiting' && <div className="notice" role="status">Switching to {operation.model} in {remainingSeconds}s · attempt {operation.attempt}/{operation.total}{operation.stageNumber ? ` · website stage ${operation.stageNumber}/${operation.stageTotal}` : ''}. Saved progress stays with this project.</div>}
           {operation?.phase === 'running' && operation.projectId === workspace?.id && <div className="notice" role="status">Using {operation.model} · attempt {operation.attempt}/{operation.total}{operation.stageNumber ? ` · website stage ${operation.stageNumber}/${operation.stageTotal}` : ''} · timeout in {remainingSeconds}s. Completed stages are saved.</div>}
           {!provider.configured && !loading && <div className="notice" role="status">Open <strong>AI connections</strong> in the sidebar to connect a model. You can create a brief now.</div>}
@@ -246,12 +247,11 @@ export default function App() {
             <div className="deliverable-head"><div><p className="eyebrow">YOUR OUTPUT</p><h2 id="deliverable-title">Project deliverables</h2></div><span>{workspace.artifact ? 'WEBSITE FILE READY' : allDone ? 'PLANS READY · WEBSITE NOT BUILT' : 'WORK IN PROGRESS'}</span></div>
             <p>The four task cards above contain your team's written plans and review. Open each <strong>Read deliverable</strong> to see what was produced. {workspace.artifact ? 'Your website prototype is saved with this local project.' : 'Completing these tasks does not create website code. Generate a prototype after all four are approved.'}</p>
             {workspace.websiteDraft?.body && !workspace.artifact && <div className="draft-progress"><strong>Website page saved · stage 1 of 2</strong><p>Page content is saved with this project. Select this project later to continue with styling; your approved plans stay saved.</p><iframe title="Saved website draft" className="artifact-preview" sandbox="" referrerPolicy="no-referrer" srcDoc={`<!doctype html><html><head><meta charset="utf-8"><style>${workspace.websiteDraft.css || 'body{font-family:system-ui;margin:2rem;line-height:1.5}'}</style></head><body>${workspace.websiteDraft.body}</body></html>`} /><details><summary>View saved page HTML</summary><pre>{workspace.websiteDraft.body}</pre></details></div>}
-            {workspace.websiteError && !error && !workspace.artifact && <p className="draft-error" role="alert">Last website attempt: {workspace.websiteError}</p>}
-            {allDone && !workspace.artifact && <button className="artifact-button" disabled={busy || !provider.configured} onClick={() => void buildWebsite()}>{fallbackWaiting ? `Next model in ${remainingSeconds}s…` : buildingWebsite ? `Building ${operation?.stage === 'css' ? 'styles' : 'page'} · stage ${operation?.stageNumber || 1}/2…` : workspace.websiteDraft?.body ? 'Continue website from saved page' : 'Generate website prototype'}</button>}
+            {allDone && !workspace.artifact && <button className="artifact-button" disabled={busy || !provider.configured} onClick={() => void buildWebsite()}>{fallbackWaiting ? `Next model in ${remainingSeconds}s…` : buildingWebsite ? `Building ${operation?.stage === 'css' ? 'styles' : 'page'} · stage ${operation?.stageNumber || 1}/2…` : workspace.websiteError ? `Retry website${workspace.websiteDraft?.body ? ' from saved page' : ''}` : workspace.websiteDraft?.body ? 'Continue website from saved page' : 'Generate website prototype'}</button>}
             {workspace.artifact && <div className="artifact-result"><div className="artifact-toolbar"><strong>index.html</strong><div><button onClick={() => setShowPreview(value => !value)}>{showPreview ? 'Hide preview' : 'Preview website'}</button><button onClick={downloadWebsite}>Download code</button></div></div><p>One self-contained HTML file with CSS and optional JavaScript. {workspace.artifact.model && <>Generated with {workspace.artifact.model} (attempt {workspace.artifact.attempts}). </>}Open the downloaded file in a browser or edit it in VS Code. This is an AI-generated draft; review the code before publishing it.</p>{showPreview && <iframe title="Website prototype preview" className="artifact-preview" sandbox="allow-scripts" referrerPolicy="no-referrer" srcDoc={workspace.artifact.content} />}<details className="artifact-source"><summary>View source code</summary><pre>{workspace.artifact.content}</pre></details></div>}
           </section>}
           </>}
-          <footer>RELAY OFFICE <span>·</span> WRITTEN PLANS &amp; WEBSITE PROTOTYPE <span className="footer-right">LOCAL / 0.7.0</span></footer>
+          <footer>RELAY OFFICE <span>·</span> WRITTEN PLANS &amp; WEBSITE PROTOTYPE <span className="footer-right">LOCAL / 0.7.1</span></footer>
         </div>
       </main>
     </div>

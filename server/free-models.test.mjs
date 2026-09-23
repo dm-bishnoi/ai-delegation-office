@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { eligibleFreeModels } from './free-models.mjs';
+import { eligibleFreeModels, withFreeFallback } from './free-models.mjs';
 import { generateWebsite } from './provider.mjs';
 import { makeWorkspace } from './workflow.mjs';
 
@@ -53,7 +53,7 @@ test('broken website response retries free models with a 1200-token cap for unkn
   assert.equal(progress.at(-1).stage, 'css');
 });
 
-test('fallback stops when disabled or when no verified free model is available', async () => {
+test('disabled fallback makes no extra request; free-only router handles an empty eligible catalog', async () => {
   let catalogCalls = 0;
   const fetchImpl = async (url) => {
     if (new URL(url).pathname.endsWith('/models')) {
@@ -64,8 +64,28 @@ test('fallback stops when disabled or when no verified free model is available',
   };
   await assert.rejects(generateWebsite(project(), { env: { ...env, AI_FREE_FALLBACK: 'false' }, fetchImpl }), /truncated/);
   assert.equal(catalogCalls, 0);
-  await assert.rejects(generateWebsite(project(), { env, fetchImpl }), /No zero-price free text fallback/);
+  const models = [];
+  const result = await withFreeFallback(async modelId => {
+    models.push(modelId);
+    if (modelId !== 'openrouter/free') throw Object.assign(new Error('model timed out'), { retryable: true });
+    return 'ok';
+  }, { env: { ...env, AI_MODEL: 'bad/selected:free' }, fetchImpl, initialTokens: 1500,
+    fallbackTokens: 1500, minimumFallbackTokens: 1200, sleepImpl: async () => {} });
+  assert.equal(result.value, 'ok');
+  assert.deepEqual(models, ['bad/selected:free', 'openrouter/free']);
   assert.equal(catalogCalls, 1);
+});
+
+test('free-only router is attempted when catalog discovery fails', async () => {
+  let attempts = 0;
+  const result = await withFreeFallback(async modelId => {
+    attempts++;
+    if (modelId !== 'openrouter/free') throw Object.assign(new Error('timeout'), { retryable: true });
+    return 'ok';
+  }, { env: { ...env, AI_MODEL: 'bad/selected:free' }, fetchImpl: async () => { throw new Error('catalog down'); },
+    initialTokens: 1500, minimumFallbackTokens: 1200, sleepImpl: async () => {} });
+  assert.equal(result.model, 'openrouter/free');
+  assert.equal(attempts, 2);
 });
 
 test('known account quota errors do not trigger free-model fallback or expose provider text', async () => {
