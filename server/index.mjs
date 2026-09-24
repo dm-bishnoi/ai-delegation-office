@@ -3,11 +3,13 @@ import { createServer } from 'node:http';
 import { readFile, stat } from 'node:fs/promises';
 import { extname, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { ClientError, completeTask, decide, failTask, makeWorkspace, nextTask, retry } from './workflow.mjs';
+import { ClientError, completeTask, decide, failTask, nextTask, retry } from './workflow.mjs';
 import { generate, generateWebsite, listModels, testConnection } from './provider.mjs';
 import { activeProviderEnv, activeProviderInfo, loadProviderSettings, publicProviderSettings,
   removeProvider, saveProvider, saveProviderSettings, selectProvider, setProviderFallback } from './provider-settings.mjs';
 import { loadStore, projectSummaries, saveStore } from './store.mjs';
+import { answerDiscovery, completeConsultancyTask, decideBrief, makeConsultancyProject } from './consultancy.mjs';
+import { collectResearch, researchPlan } from './research.mjs';
 
 const port = Number(process.env.API_PORT || 3001);
 if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('API_PORT must be a valid port.');
@@ -22,7 +24,7 @@ function activeProject() {
 }
 
 function snapshot() {
-  return { workspace: activeProject(), projects: projectSummaries(catalog), provider: activeProviderInfo(providerSettings), busy, operation };
+  return { workspace: activeProject(), projects: projectSummaries(catalog), provider: activeProviderInfo(providerSettings), researchSearchConfigured: Boolean(process.env.BRAVE_SEARCH_API_KEY?.trim()), busy, operation };
 }
 
 function requireActive(projectId) {
@@ -121,7 +123,7 @@ const server = createServer(async (req, res) => {
         catch (cause) { throw new ClientError(502, cause instanceof Error ? cause.message : 'Connection test failed.'); }
       }
       if (pathname === '/api/projects') {
-        const next = makeWorkspace(body?.brief);
+        const next = makeConsultancyProject(body?.brief);
         const updated = { activeProjectId: next.id, projects: [...catalog.projects, next] };
         await saveStore(updated);
         catalog = updated;
@@ -135,17 +137,40 @@ const server = createServer(async (req, res) => {
         catalog = updated;
         return json(res, 200, snapshot());
       }
-      if (pathname === '/api/steps') {
-        if (!activeProviderInfo(providerSettings).configured) throw new ClientError(503, 'Connect an AI provider in Settings first.');
+      if (pathname === '/api/discovery/answers') {
         const project = requireActive(body?.projectId);
+        answerDiscovery(project, body?.answers);
+        await saveStore(catalog);
+        return json(res, 200, snapshot());
+      }
+      if (pathname === '/api/discovery/decision') {
+        const project = requireActive(body?.projectId);
+        decideBrief(project, body?.decision);
+        await saveStore(catalog);
+        return json(res, 200, snapshot());
+      }
+      if (pathname === '/api/steps') {
+        const project = requireActive(body?.projectId);
+        if (!activeProviderInfo(providerSettings).configured && !(project.mode === 'consultancy' && project.tasks[0]?.status === 'queued' && !process.env.BRAVE_SEARCH_API_KEY)) {
+          throw new ClientError(503, 'Connect an AI provider in AI connections first.');
+        }
         const task = nextTask(project);
         try {
           touch(project);
           await saveStore(catalog);
-          const output = await generate(project, task, { env: await activeProviderEnv(providerSettings), onAttempt: progress => { operation = { type: 'task', projectId: project.id, ...progress,
+          let research;
+          if (project.mode === 'consultancy' && task.id === 1) {
+            operation = { type: 'research', projectId: project.id, agent: task.owner, stage: 'search' };
+            research = await collectResearch(project);
+            project.research = research;
+            touch(project);
+            await saveStore(catalog);
+          }
+          const output = research && research.status !== 'snippets' ? researchPlan(project, research) : await generate(project, task, { research, env: await activeProviderEnv(providerSettings), onAttempt: progress => { operation = { type: 'task', projectId: project.id, agent: task.owner, ...progress,
             readyAt: progress.phase === 'waiting' ? Date.now() + progress.delayMs : null,
             deadlineAt: progress.phase === 'running' ? Date.now() + progress.timeoutMs : null }; } });
-          completeTask(project, task, output);
+          if (project.mode === 'consultancy') completeConsultancyTask(project, task, output);
+          else completeTask(project, task, output);
         } catch (error) {
           failTask(project, task, error instanceof Error ? error.message : 'AI request failed.');
         }
@@ -174,7 +199,7 @@ const server = createServer(async (req, res) => {
         }
         const updated = structuredClone(catalog);
         const completed = updated.projects.find(item => item.id === project.id);
-        completed.artifact = artifact;
+        completed.artifact = { ...artifact, version: (completed.artifactVersions?.length || 0) + 1, files: [{ filename: artifact.filename, content: artifact.content }] };
         delete completed.websiteDraft;
         delete completed.websiteError;
         completed.activity.unshift({ id: completed.nextId++, agent: 'build', message: 'Website prototype is ready to preview and download.', time: artifact.createdAt });
@@ -182,6 +207,21 @@ const server = createServer(async (req, res) => {
         touch(completed);
         await saveStore(updated);
         catalog = updated;
+        return json(res, 200, snapshot());
+      }
+      if (pathname === '/api/website/revise') {
+        const project = requireActive(body?.projectId);
+        if (!project.artifact) throw new ClientError(409, 'Build a website before requesting a revision.');
+        if (typeof body?.feedback !== 'string' || !body.feedback.trim() || body.feedback.length > 800) throw new ClientError(400, 'Describe the website change in 1–800 characters.');
+        project.artifactVersions ||= [];
+        project.artifactVersions.push(project.artifact);
+        project.websiteFeedback = body.feedback.trim();
+        delete project.artifact;
+        delete project.websiteDraft;
+        project.activity.unshift({ id: project.nextId++, agent: 'build', message: 'Website revision requested. The previous version is saved.', time: new Date().toISOString() });
+        project.activity = project.activity.slice(0, 100);
+        touch(project);
+        await saveStore(catalog);
         return json(res, 200, snapshot());
       }
       const decision = pathname.match(/^\/api\/tasks\/(\d+)\/decision$/);
