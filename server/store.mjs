@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { setTimeout as delay } from 'node:timers/promises';
 import { failTask } from './workflow.mjs';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..', 'data');
@@ -54,11 +55,31 @@ export async function loadStore(path = dataFile, legacyPath = legacyDataFile) {
   return store;
 }
 
-export async function saveStore(store, path = dataFile) {
+const transientRenameErrors = new Set(['EPERM', 'EACCES', 'EBUSY']);
+
+export async function saveStore(store, path = dataFile, { renameFile = rename, retryDelayMs = 80, maxRenameRetries = 5 } = {}) {
   await mkdir(dirname(path), { recursive: true });
-  const temporary = `${path}.${process.pid}.tmp`;
-  await writeFile(temporary, `${JSON.stringify(store, null, 2)}\n`, { mode: 0o600 });
-  await rename(temporary, path);
+  const temporary = `${path}.${process.pid}.${randomUUID()}.tmp`;
+  try {
+    await writeFile(temporary, `${JSON.stringify(store, null, 2)}\n`, { mode: 0o600, flag: 'wx' });
+    for (let attempt = 0; ; attempt++) {
+      try {
+        await renameFile(temporary, path);
+        return;
+      } catch (error) {
+        if (!transientRenameErrors.has(error?.code)) throw error;
+        if (attempt >= maxRenameRetries) {
+          const blocked = new Error('Could not save the project: Windows is blocking data/projects.json. Close duplicate app processes or software holding the file, then retry. Existing saved data was not deleted.', { cause: error });
+          blocked.code = 'STORE_BUSY';
+          throw blocked;
+        }
+        await delay(retryDelayMs * (attempt + 1));
+      }
+    }
+  } finally {
+    // A failed replace must never remove the existing project file.
+    await rm(temporary, { force: true }).catch(() => {});
+  }
 }
 
 export function projectSummaries(store) {
