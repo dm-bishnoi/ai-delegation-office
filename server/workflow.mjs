@@ -34,6 +34,9 @@ function entry(workspace, agent, message) {
 
 export function nextTask(workspace) {
   if (!workspace) throw new ClientError(404, 'Create a project first.');
+  if (workspace.mode === 'consultancy' && workspace.discovery?.status !== 'approved') {
+    throw new ClientError(409, 'Answer the discovery questions and approve the brief first.');
+  }
   if (workspace.tasks.some(task => task.status === 'review')) throw new ClientError(409, 'Review the pending deliverable first.');
   if (workspace.tasks.some(task => task.status === 'failed')) throw new ClientError(409, 'Retry the failed task first.');
   if (workspace.tasks.some(task => task.status === 'active')) throw new ClientError(409, 'A task is already running.');
@@ -47,6 +50,10 @@ export function nextTask(workspace) {
 
 export function completeTask(workspace, task, output) {
   if (task.status !== 'active') throw new ClientError(409, 'Task is not active.');
+  if (task.output && task.output !== output) {
+    task.revisions ||= [];
+    task.revisions.push({ content: task.output, replacedAt: new Date().toISOString() });
+  }
   task.output = output;
   task.feedback = undefined;
   task.status = task.requiresApproval ? 'review' : 'done';
@@ -68,7 +75,9 @@ export function decide(workspace, taskId, decision, feedback = '') {
   if (typeof feedback !== 'string' || feedback.length > 1000) throw new ClientError(400, 'Feedback must be at most 1000 characters.');
   if (decision === 'revise' && !feedback.trim()) throw new ClientError(400, 'Tell the agent what to revise.');
   task.status = decision === 'approve' ? 'done' : 'queued';
+  if (decision === 'approve') task.approvedAt = new Date().toISOString();
   if (decision === 'revise') task.feedback = feedback.trim();
+  if (decision === 'revise' && workspace.mode === 'consultancy' && task.id === 3 && workspace.designPreview) workspace.designPreview.stale = true;
   entry(workspace, task.owner, decision === 'approve' ? `${task.title} approved by you.` : `${task.title} sent back with feedback.`);
   return task;
 }

@@ -1,25 +1,26 @@
 # Relay Office architecture
 
-Status: current implementation and proposed migration. v0.7.1 has a local Node HTTP API, a React/Vite client, a Three.js office, and a JSON project store. The consultancy pipeline and 2D office below are targets, not shipped behavior.
+Status: implemented local consultancy workflow and longer-term migration targets. The local Node API, React/Vite client, illustrated 2D office and JSON store are implemented; hosted isolation, verified page research and image generation are future work.
 
 ## Current system (v0.7.1)
 
 | Concern | Current module / behavior |
 | --- | --- |
 | UI and orchestration | `src/App.tsx`, `src/workflow.ts`; polls `/api/workspace`, renders tasks, review, saved project selector, and prototype preview |
-| Office | `src/OfficeScene.tsx`; Three.js isometric geometry, selections and task-related work labels |
+| Office | `src/OfficeScene.tsx`; responsive SVG/CSS illustrated people, selection and bubbles derived from task state |
 | API | `server/index.mjs`; localhost `127.0.0.1`, JSON endpoints, one global in-memory busy flag, long-lived provider requests |
-| Workflow | `server/workflow.mjs`; four sequential written tasks, approval for Nova and Echo, failed-task retry |
+| Workflow | `server/workflow.mjs`, `server/consultancy.mjs`; legacy tasks preserved, new projects add saved starter and follow-up discovery answers and four approval-gated consultancy assignments |
+| Research | `server/research.mjs`; optional Brave Search URLs and snippets, explicitly labeled as unverified, or a research plan without a search key |
 | Provider | `server/provider.mjs`, `server/free-models.mjs`; OpenAI-compatible chat completions, bounded OpenRouter free fallback |
 | Settings | `server/provider-settings.mjs`; server-side encrypted credentials in gitignored `data/providers.json`, local key in `data/provider.key` |
 | Persistence | `server/store.mjs`; atomic JSON replacement for `data/projects.json`; imports legacy `data/workspace.json` |
-| Prototype | Two checkpointed stages (HTML body, CSS), then one `index.html` in project JSON; one download, iframe preview; completed artifact cannot currently be regenerated |
+| Prototype | Two checkpointed stages (HTML body, CSS), then one `index.html` in project JSON; iframe preview, download and saved versions with user revision feedback |
 
-No app authentication, user ownership, hosted database, verified web search, image generation, editable multi-file output, or 2D illustrated office currently exists. The current client can display task outputs but has no source-backed research tool. Saved `data/` and `.env` are excluded from Git.
+No app authentication, user ownership, hosted database, full webpage retrieval/verification, image generation, or editable multi-file output exists. Research captures search-result excerpts only; its descriptions cannot prove claims about a source page. Saved `data/` and `.env` are excluded from Git.
 
 ## Proposed modules and flow
 
-Project conversation → discovery brief → explicit approval → source-backed research → requirements approval → design review → optional build → review/version/download. Each stage reads approved upstream versions and writes an independent draft artifact. Only the user approves or revises; downstream artifacts that depend on revised input become stale until revalidated.
+Current new-project flow: idea → four saved starter answers → two scope/success follow-ups → clarified brief approval → optional search snippets or research plan → requirements approval → design draft and structural wireframe approval → Echo review → optional checkpointed build/version/download. Only the user approves or revises. Existing projects retain the older task order and artifacts.
 
 - `project` owns immutable IDs, stage state, question/answer history, confirmed facts, assumptions, open questions, approvals, artifact references, and last update time.
 - `artifact` holds kind, version, producer, provider/model if known, references to upstream versions, source links, saved file or content, and review decision.

@@ -1,6 +1,6 @@
 # Relay Office design system
 
-Status: proposed visual direction based on the approved 2D office concept. The running v0.7.1 UI still uses a Three.js isometric scene and the CSS in `src/styles.css`; this file does not claim that the mockup or illustrated characters are implemented.
+Status: illustrated 2D office implemented in `src/OfficeScene.tsx` and `src/styles.css`; the reference mockup remains a direction, not a claim of exact visual fidelity. Browser-level visual review remains useful.
 
 ## Visual character
 

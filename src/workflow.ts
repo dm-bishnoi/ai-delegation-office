@@ -19,6 +19,8 @@ export interface Task {
   output?: string;
   error?: string;
   feedback?: string;
+  approvedAt?: string;
+  revisions?: { content: string; replacedAt: string }[];
 }
 
 export interface Entry {
@@ -33,11 +35,17 @@ export interface Workspace {
   createdAt?: string;
   updatedAt?: string;
   brief: string;
+  mode?: 'consultancy';
+  discovery?: { status: 'questions' | 'followup' | 'review' | 'approved'; answers: Record<string, string>; brief: string };
+  research?: { status: 'unavailable' | 'empty' | 'snippets'; searchedAt: string | null; reason?: string; query?: string; sources: { title: string; url: string; excerpt: string }[] };
+  designPreview?: { filename: string; content: string; kind: string; createdAt: string; stale?: boolean };
   tasks: Task[];
   activity: Entry[];
   nextId: number;
   running?: boolean;
-  artifact?: { kind: 'website'; filename: string; content: string; createdAt: string; model?: string; attempts?: number };
+  artifact?: { kind: 'website'; filename: string; content: string; createdAt: string; model?: string; attempts?: number; version?: number; files?: { filename: string; content: string }[] };
+  artifactVersions?: Workspace['artifact'][];
+  websiteFeedback?: string;
   websiteDraft?: { body?: string; css?: string; model?: string; attempts?: number };
   websiteError?: string;
 }
