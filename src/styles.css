@@ -229,7 +229,15 @@ footer { display: flex; padding: 40px 0 15px; color: #617074; font: 700 9px Manr
 .office-screen i { display:block;width:65%;height:5px;background:#c27f5e;margin-bottom:5px; }
 .wireboard { display:flex;gap:5px;align-items:center; }
 .wireboard span { display:block;flex:1;height:58px;border:2px solid #899892;background:linear-gradient(#b0c3b9 0 10px,transparent 10px); }
-.office-person { position:absolute;bottom:26px;left:6%;height:154px;width:112px;z-index:3;filter:drop-shadow(2px 5px 2px #1519187a);transition:transform .6s ease; }
+.office-person { position:absolute;bottom:26px;left:6%;height:154px;width:112px;z-index:3;filter:drop-shadow(2px 5px 2px #1519187a);transition:transform .6s ease;animation:office-breathe 3.6s ease-in-out infinite; }
+.office-station:nth-child(2) .office-person { animation-delay:-.8s; }
+.office-station:nth-child(3) .office-person { animation-delay:-1.7s; }
+.office-station:nth-child(4) .office-person { animation-delay:-2.5s; }
+.office-person.working { animation-duration:1.8s; }
+.office-eyes { transform-box:fill-box;transform-origin:center;animation:office-blink 6.5s ease-in-out infinite; }
+.office-station:nth-child(2) .office-eyes { animation-delay:-1.4s; }
+.office-station:nth-child(3) .office-eyes { animation-delay:-3.3s; }
+.office-station:nth-child(4) .office-eyes { animation-delay:-4.8s; }
 .office-station.is-working .office-person { transform:translateX(9px); }
 .office-person.working .office-arm { transform-origin:45px 80px;animation:office-write .65s ease-in-out infinite alternate; }
 .office-person.working .office-hand { transform-origin:80px 80px;animation:office-write .85s ease-in-out infinite alternate-reverse; }
@@ -237,6 +245,8 @@ footer { display: flex; padding: 40px 0 15px; color: #617074; font: 700 9px Manr
 .office-desk span { position:absolute;right:10%;top:21px;height:60px;width:8px;background:#654c3c; }
 .office-floor { position:absolute;bottom:0;left:0;right:0;height:13px;background:#594635;z-index:3; }
 @keyframes office-write { to { transform:rotate(-15deg); } }
+@keyframes office-breathe { 50% { translate:0 -4px; } }
+@keyframes office-blink { 0%,46%,49%,100% { transform:scaleY(1); } 47%,48% { transform:scaleY(.08); } }
 .consultancy-section,.project-docs,.research-result,.design-result { border:1px solid #354240;border-radius:9px;background:#192326;padding:22px;margin-top:18px; }
 .consultancy-section h2 { font-size:21px; }
 .discovery-form p,.brief-review p,.research-result p,.design-result p,.project-docs p {color:#acb9b4;font-size:12px;line-height:1.6;}
@@ -260,4 +270,4 @@ footer { display: flex; padding: 40px 0 15px; color: #617074; font: 700 9px Manr
 .version-history > div {margin:11px 0;display:flex;align-items:center;gap:12px;}
 @media(max-width:1080px) { .office-2d{height:auto;min-height:480px;grid-template-columns:repeat(2,minmax(0,1fr));}.office-station{min-height:230px;}.office-person{height:125px}.office-board,.office-screen{height:68px;top:12px;} }
 @media(max-width:600px) { .office-2d{min-height:500px;}.office-role{font-size:12px}.office-bubble{font-size:9px;padding:7px;}.office-person{height:100px;left:0;bottom:18px;}.office-board,.office-screen{right:2%;width:63%;font-size:9px;padding:4px;}.office-desk{bottom:22px}.question-grid{grid-template-columns:1fr;} }
-@media(prefers-reduced-motion:reduce){.office-person.working .office-arm,.office-person.working .office-hand{animation:none;}.office-person{transition:none;}}
+@media(prefers-reduced-motion:reduce){.office-person.working .office-arm,.office-person.working .office-hand,.office-person,.office-eyes{animation:none;}.office-person{transition:none;}}
