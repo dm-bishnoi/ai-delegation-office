@@ -36,7 +36,8 @@ export interface Workspace {
   updatedAt?: string;
   brief: string;
   mode?: 'consultancy';
-  discovery?: { status: 'questions' | 'followup' | 'review' | 'approved'; answers: Record<string, string>; brief: string };
+  discovery?: { status: 'questions' | 'followup' | 'review' | 'approved'; answers: Record<string, string>; brief: string;
+    questions?: DiscoveryQuestion[]; followUpQuestions?: DiscoveryQuestion[]; questionModel?: string; followUpModel?: string };
   research?: { status: 'unavailable' | 'empty' | 'snippets'; searchedAt: string | null; reason?: string; query?: string; sources: { title: string; url: string; excerpt: string }[] };
   designPreview?: { filename: string; content: string; kind: string; createdAt: string; stale?: boolean };
   tasks: Task[];
@@ -49,6 +50,8 @@ export interface Workspace {
   websiteDraft?: { body?: string; css?: string; model?: string; attempts?: number };
   websiteError?: string;
 }
+
+export interface DiscoveryQuestion { key: string; question: string; options: string[] }
 
 export interface ProjectSummary {
   id: string;
