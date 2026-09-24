@@ -243,7 +243,7 @@ const server = createServer(async (req, res) => {
       return json(res, 404, { error: 'Not found.' });
     } finally { busy = false; operation = null; }
   } catch (error) {
-    const status = error instanceof ClientError ? error.status : 500;
+    const status = error?.code === 'STORE_BUSY' ? 503 : error instanceof ClientError ? error.status : 500;
     if (status === 500) console.error('API error:', error);
     if (!res.headersSent) json(res, status, { error: status === 500 ? 'Server error. Check the API console.' : error.message });
   }
