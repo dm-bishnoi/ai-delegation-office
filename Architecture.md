@@ -9,7 +9,7 @@ Status: implemented local consultancy workflow and longer-term migration targets
 | UI and orchestration | `src/App.tsx`, `src/workflow.ts`; polls `/api/workspace`, renders tasks, review, saved project selector, and prototype preview |
 | Office | `src/OfficeScene.tsx`; responsive SVG/CSS illustrated people, selection and bubbles derived from task state |
 | API | `server/index.mjs`; localhost `127.0.0.1`, JSON endpoints, one global in-memory busy flag, long-lived provider requests |
-| Workflow | `server/workflow.mjs`, `server/consultancy.mjs`; legacy tasks preserved, new projects add saved discovery and four approval-gated consultancy assignments |
+| Workflow | `server/workflow.mjs`, `server/consultancy.mjs`; legacy tasks preserved, new projects add saved starter and follow-up discovery answers and four approval-gated consultancy assignments |
 | Research | `server/research.mjs`; optional Brave Search URLs and snippets, explicitly labeled as unverified, or a research plan without a search key |
 | Provider | `server/provider.mjs`, `server/free-models.mjs`; OpenAI-compatible chat completions, bounded OpenRouter free fallback |
 | Settings | `server/provider-settings.mjs`; server-side encrypted credentials in gitignored `data/providers.json`, local key in `data/provider.key` |
@@ -20,7 +20,7 @@ No app authentication, user ownership, hosted database, full webpage retrieval/v
 
 ## Proposed modules and flow
 
-Current new-project flow: idea → four saved answers → clarified brief approval → optional search snippets or research plan → requirements approval → design draft and structural wireframe approval → Echo review → optional checkpointed build/version/download. Only the user approves or revises. Existing projects retain the older task order and artifacts.
+Current new-project flow: idea → four saved starter answers → two scope/success follow-ups → clarified brief approval → optional search snippets or research plan → requirements approval → design draft and structural wireframe approval → Echo review → optional checkpointed build/version/download. Only the user approves or revises. Existing projects retain the older task order and artifacts.
 
 - `project` owns immutable IDs, stage state, question/answer history, confirmed facts, assumptions, open questions, approvals, artifact references, and last update time.
 - `artifact` holds kind, version, producer, provider/model if known, references to upstream versions, source links, saved file or content, and review decision.
