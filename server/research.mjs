@@ -24,7 +24,7 @@ export async function collectResearch(project, { key = process.env.BRAVE_SEARCH_
 }
 
 export function researchPlan(project, result) {
-  if (result.status === 'unavailable') return `# Research plan — sources not collected\n\n${result.reason}\n\nBrief: ${project.discovery?.brief || project.brief}\n\nSuggested checks: identify direct alternatives; interview representative users; verify demand, accessibility needs, and delivery constraints. This is a plan, not researched findings. Connect search and retry this task to collect live results.`;
+  if (result.status === 'unavailable') return `# Research plan — sources not collected\n\n${result.reason}\n\nBrief: ${project.discovery?.brief || project.brief}\n\nSuggested checks: identify direct alternatives; interview representative users; verify demand, accessibility needs, and delivery constraints. This is a plan, not researched findings. To collect live results, configure search, request a revision of this task, then run it again.`;
   if (result.status === 'empty') return `# Research plan — no search results\n\nSearch query: ${result.query}\n\nNo usable sources were returned. Refine the brief or search query before making factual claims. This is a research plan, not evidence-backed findings.`;
   return null;
 }
