@@ -1,10 +1,10 @@
-import { useCallback, useEffect, useState, type CSSProperties, type FormEvent } from 'react';
+import { useCallback, useEffect, useRef, useState, type CSSProperties, type FormEvent } from 'react';
 import OfficeScene from './OfficeScene';
 import ProviderSettings from './ProviderSettings';
 import { agents, type AgentId, type ProjectSummary, type Task, type TaskStatus, type Workspace } from './workflow';
 
 type Provider = { configured: boolean; model: string | null; name?: string };
-type Operation = { type: 'website' | 'task'; projectId: string; model?: string; attempt?: number; total?: number; phase?: 'running' | 'waiting'; delayMs?: number; readyAt?: number | null; deadlineAt?: number | null; stage?: string; stageNumber?: number; stageTotal?: number } | null;
+type Operation = { type: 'website' | 'task' | 'discovery'; projectId: string; model?: string; attempt?: number; total?: number; phase?: 'running' | 'waiting'; delayMs?: number; readyAt?: number | null; deadlineAt?: number | null; stage?: string; stageNumber?: number; stageTotal?: number } | null;
 type Snapshot = { workspace: Workspace | null; projects: ProjectSummary[]; provider: Provider; researchSearchConfigured: boolean; busy: boolean; operation: Operation };
 const empty: Workspace = { brief: '', tasks: [], activity: [], running: false, nextId: 1 };
 const columns: { status: TaskStatus; label: string }[] = [
@@ -65,6 +65,7 @@ export default function App() {
   const [error, setError] = useState('');
   const [brief, setBrief] = useState('');
   const [answers, setAnswers] = useState<Record<string, string>>({});
+  const askedStages = useRef(new Set<string>());
   const [websiteFeedback, setWebsiteFeedback] = useState('');
   const [feedback, setFeedback] = useState<Record<number, string>>({});
   const [selected, setSelected] = useState<AgentId>('lead');
@@ -152,6 +153,35 @@ export default function App() {
     } finally { setBusy(false); }
   }
 
+  const askQuestions = useCallback(async (projectId: string) => {
+    setBusy(true);
+    setError('');
+    let finished = false;
+    const poll = window.setInterval(() => {
+      void api<Snapshot>('/api/workspace').then(snapshot => {
+        if (!finished && snapshot.workspace?.id === projectId) setOperation(snapshot.operation);
+      }).catch(() => { /* The questions request reports the connection error. */ });
+    }, 800);
+    try {
+      const result = await api<Snapshot>('/api/discovery/questions', { projectId });
+      if (result.workspace?.id === projectId) { setWorkspace(result.workspace); setProjects(result.projects); }
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Could not prepare questions. Your answers are safe.');
+    } finally { finished = true; window.clearInterval(poll); setOperation(null); setBusy(false); }
+  }, []);
+
+  useEffect(() => {
+    const discovery = workspace?.discovery;
+    const stage = discovery?.status;
+    if (loading || busy || !provider.configured || !workspace?.id || (stage !== 'questions' && stage !== 'followup')) return;
+    if (stage === 'questions' && (discovery?.questions?.length || questions.some(item => discovery?.answers[item.key]?.trim()))) return;
+    if (stage === 'followup' && (discovery?.followUpQuestions?.length || followUps.some(item => discovery?.answers[item.key]?.trim()))) return;
+    const key = `${workspace.id}:${stage}`;
+    if (askedStages.current.has(key)) return;
+    askedStages.current.add(key);
+    void askQuestions(workspace.id);
+  }, [workspace, loading, busy, provider.configured, askQuestions]);
+
   async function buildWebsite() {
     if (!workspace?.id || busy) return;
     setSelected('build');
@@ -216,6 +246,10 @@ export default function App() {
   const fallbackWaiting = buildingWebsite && operation?.phase === 'waiting';
   const countdownTo = operation?.phase === 'waiting' ? operation.readyAt : operation?.deadlineAt;
   const remainingSeconds = countdownTo ? Math.max(0, Math.ceil((countdownTo - now) / 1000)) : 0;
+  const discoveryStage = workspace?.discovery?.status;
+  const tailoredQuestions = discoveryStage === 'followup' ? workspace?.discovery?.followUpQuestions : workspace?.discovery?.questions;
+  const activeQuestions = tailoredQuestions?.length ? tailoredQuestions : (discoveryStage === 'followup' ? followUps : questions).map(item => ({ key: item.key, question: item.label, options: [] }));
+  const stageHasAnswers = (discoveryStage === 'followup' ? followUps : questions).some(item => Boolean(workspace?.discovery?.answers[item.key]?.trim() || answers[item.key]?.trim()));
 
   return (
     <div className="app-shell">
@@ -248,8 +282,8 @@ export default function App() {
           }} /> : <>
           <div className="heading-row"><div><p className="eyebrow">YOUR COMMAND CENTER <span className="eyebrow-rule" /></p><h1>Where ideas <em>take shape.</em></h1><p className="intro">Clarify your idea, review the evidence and approve each saved deliverable.</p></div><span className="project-number">PROJECT / LOCAL <span>↗</span></span></div>
           {(error || websiteFailure) && <div className="notice error" role="alert"><span>{error || workspace?.websiteError}</span>{websiteFailure && <button type="button" className="notice-retry" onClick={() => void buildWebsite()} disabled={!provider.configured}>Retry website{workspace?.websiteDraft?.body ? ' from saved page' : ''}</button>}</div>}
-          {operation?.phase === 'waiting' && <div className="notice" role="status">Switching to {operation.model} in {remainingSeconds}s · attempt {operation.attempt}/{operation.total}{operation.stageNumber ? ` · website stage ${operation.stageNumber}/${operation.stageTotal}` : ''}. Saved progress stays with this project.</div>}
-          {operation?.phase === 'running' && operation.projectId === workspace?.id && <div className="notice" role="status">Using {operation.model} · attempt {operation.attempt}/{operation.total}{operation.stageNumber ? ` · website stage ${operation.stageNumber}/${operation.stageTotal}` : ''} · timeout in {remainingSeconds}s. Completed stages are saved.</div>}
+          {operation?.phase === 'waiting' && <div className="notice" role="status">Switching to {operation.model} in {remainingSeconds}s · attempt {operation.attempt}/{operation.total}{operation.stageNumber ? ` · website stage ${operation.stageNumber}/${operation.stageTotal}` : operation.type === 'discovery' ? ' · preparing questions' : ''}. Saved progress stays with this project.</div>}
+          {operation?.phase === 'running' && operation.projectId === workspace?.id && <div className="notice" role="status">Using {operation.model} · attempt {operation.attempt}/{operation.total}{operation.stageNumber ? ` · website stage ${operation.stageNumber}/${operation.stageTotal}` : operation.type === 'discovery' ? ' · preparing questions' : ''} · timeout in {remainingSeconds}s. Your saved answers are safe.</div>}
           {!provider.configured && !loading && <div className="notice" role="status">Open <strong>AI connections</strong> to connect a model for written deliverables. Discovery and an offline research plan can be saved now.</div>}
 
           <div className="workspace-grid">
@@ -261,7 +295,12 @@ export default function App() {
 
           {workspace?.mode === 'consultancy' && <section className="consultancy-section" aria-labelledby="discovery-title"><p className="eyebrow">DISCOVER → RESEARCH → REQUIREMENTS → DESIGN → REVIEW</p><h2 id="discovery-title">Understand the project</h2>
             {['questions', 'followup'].includes(workspace.discovery?.status || '') && <form className="discovery-form" onSubmit={async event => { event.preventDefault(); if (await mutate('/api/discovery/answers', { projectId: workspace.id, answers: { ...workspace.discovery?.answers, ...answers } })) setAnswers({}); }}>
-              <p>{workspace.discovery?.status === 'followup' ? 'Nova has two follow-up questions about scope and success. Your earlier answers are saved.' : 'Nova has four starter questions. Save answers at any time; audience, problem and goal need enough detail. Constraints may be “not decided”.'}</p><div className="question-grid">{(workspace.discovery?.status === 'followup' ? followUps : questions).map(question => <label key={question.key}>{question.label}<textarea maxLength={500} value={answers[question.key] ?? workspace.discovery?.answers[question.key] ?? ''} onChange={event => setAnswers(previous => ({ ...previous, [question.key]: event.target.value }))} placeholder="Your answer" disabled={busy} /></label>)}</div><button type="submit" disabled={busy}>{workspace.discovery?.status === 'followup' ? 'Save and review clarified brief' : 'Save answers and continue'}</button></form>}
+              <p>{discoveryStage === 'followup' ? 'Nova uses your saved answers to clarify scope and success.' : 'Nova asks about your project idea. Save answers at any time; constraints may be “not decided”.'} {tailoredQuestions?.length ? 'Choose a suggestion or write your own answer.' : 'Guided questions are available while Nova prepares tailored questions.'}</p>
+              {provider.configured && <button type="button" className="question-refresh" disabled={busy || stageHasAnswers} onClick={() => { askedStages.current.add(`${workspace.id}:${discoveryStage}`); void askQuestions(workspace.id!); }}>{busy && operation?.type === 'discovery' ? 'Nova is preparing questions…' : tailoredQuestions?.length ? 'Refresh suggestions' : 'Ask Nova project-specific questions'}</button>}
+              <div className="question-grid">{activeQuestions.map(question => <div className="question-field" key={question.key}><label htmlFor={`discovery-${question.key}`}>{question.question}</label>
+                {question.options.length > 0 && <div className="question-options" aria-label={`Suggestions for ${question.question}`}>{question.options.map(option => <button key={option} type="button" aria-pressed={(answers[question.key] ?? workspace.discovery?.answers[question.key] ?? '') === option} onClick={() => setAnswers(previous => ({ ...previous, [question.key]: option }))} disabled={busy}>{option}</button>)}</div>}
+                <textarea id={`discovery-${question.key}`} maxLength={500} value={answers[question.key] ?? workspace.discovery?.answers[question.key] ?? ''} onChange={event => setAnswers(previous => ({ ...previous, [question.key]: event.target.value }))} placeholder="Write your own answer or edit a suggestion" disabled={busy} /></div>)}</div>
+              <button type="submit" disabled={busy}>{discoveryStage === 'followup' ? 'Save and review clarified brief' : 'Save answers and continue'}</button></form>}
             {workspace.discovery?.status === 'review' && <div className="brief-review"><p>Read the clarified brief before the team starts work.</p><pre>{workspace.discovery.brief}</pre><div className="review-actions"><button onClick={() => void mutate('/api/discovery/decision', { projectId: workspace.id, decision: 'revise' })} disabled={busy}>Edit answers</button><button onClick={() => void mutate('/api/discovery/decision', { projectId: workspace.id, decision: 'approve' })} disabled={busy}>Approve brief</button></div></div>}
             {workspace.discovery?.status === 'approved' && <details><summary>Approved brief · read or download</summary><pre>{workspace.discovery.brief}</pre><button onClick={() => downloadText('PROJECT_BRIEF.md', workspace.discovery?.brief || '')}>Download brief</button></details>}
           </section>}
