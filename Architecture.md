@@ -9,7 +9,7 @@ Status: implemented local consultancy workflow and longer-term migration targets
 | UI and orchestration | `src/App.tsx`, `src/workflow.ts`; polls `/api/workspace`, renders tasks, review, saved project selector, and prototype preview |
 | Office | `src/OfficeScene.tsx`; responsive SVG/CSS illustrated people, selection and bubbles derived from task state |
 | API | `server/index.mjs`; localhost `127.0.0.1`, JSON endpoints, one global in-memory busy flag, long-lived provider requests |
-| Workflow | `server/workflow.mjs`, `server/consultancy.mjs`; legacy tasks preserved, new projects add saved starter and follow-up discovery answers and four approval-gated consultancy assignments |
+| Workflow | `server/workflow.mjs`, `server/consultancy.mjs`; legacy tasks preserved, new projects add saved starter and follow-up discovery answers, optional AI-tailored question wording and answer suggestions, and four approval-gated consultancy assignments |
 | Research | `server/research.mjs`; optional Brave Search URLs and snippets, explicitly labeled as unverified, or a research plan without a search key |
 | Provider | `server/provider.mjs`, `server/free-models.mjs`; OpenAI-compatible chat completions, bounded OpenRouter free fallback |
 | Settings | `server/provider-settings.mjs`; server-side encrypted credentials in gitignored `data/providers.json`, local key in `data/provider.key` |
