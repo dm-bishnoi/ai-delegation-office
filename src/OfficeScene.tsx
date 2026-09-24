@@ -32,7 +32,7 @@ export default function OfficeScene({ workspace, websiteBuilding, selected, onSe
       const message = active ? agent.id === 'build' && websiteBuilding ? 'Writing the website prototype…' : verbs[agent.id] + ' · ' + task?.title.toLowerCase() + '…'
         : discovery ? workspace.discovery?.status === 'review' ? 'Please review the clarified brief.' : 'Tell me about your users and goals.'
         : task?.status === 'review' ? 'Draft ready for your review.' : task?.status === 'failed' ? 'This task needs a retry.'
-        : task?.status === 'done' ? 'Approved and saved.' : idle[agent.id];
+        : task?.status === 'done' ? task.requiresApproval ? 'Approved and saved.' : 'Draft saved.' : idle[agent.id];
       return <button type="button" key={agent.id} className={['office-station', 'station-' + agent.id, selected === agent.id ? 'selected' : '', active ? 'is-working' : ''].join(' ')} onClick={() => onSelect(agent.id)} aria-label={'Inspect ' + agent.name + '. ' + message}>
         <div className="office-role"><span className={active ? 'status-on' : ''} />{verbs[agent.id]}<small>{agent.name}</small></div>
         <div className="office-bubble" role="status">{message}</div>
