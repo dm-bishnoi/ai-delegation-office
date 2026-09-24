@@ -1,6 +1,6 @@
 # Relay Office agent and contributor guide
 
-Applies to this repository. Read [PRD.md](PRD.md) for the proposed product, [DESIGN_SYSTEM.md](DESIGN_SYSTEM.md) for UI direction, and [Architecture.md](Architecture.md) for current code and migration boundaries. The v0.7.1 implementation is described in [README.md](README.md); planned behavior in these docs must not be represented as shipped.
+Applies to this repository. Read [PRD.md](PRD.md) for the product direction, [DESIGN_SYSTEM.md](DESIGN_SYSTEM.md) for UI direction, [Architecture.md](Architecture.md) for code and migration boundaries, and [README.md](README.md) for the current user flow. Distinguish implemented behavior from longer-term plans in those documents.
 
 ## Human approvals and truthfulness
 
@@ -21,7 +21,7 @@ Applies to this repository. Read [PRD.md](PRD.md) for the proposed product, [DES
 | Atlas / engineer | Approved scope and designs | Feasibility notes and, on request, editable implementation files | User inspects preview and files |
 | Echo / reviewer | Prior artifacts and stated criteria | Concrete findings, open issues, review decision | User resolves blockers |
 
-The current app has only Nova, Mira, Atlas, and Echo, with four sequential written tasks. Do not imply the research specialist, discovery conversation, or editable multi-file site has been built.
+The current app has Nova, Mira, Atlas, and Echo. Nova owns the research task; the specialist is a proposed separate role. Discovery is a four-question saved form; website output remains a single editable HTML file. Do not imply a dynamic interview, verified full-page research, raster image generation, or multi-file site is implemented.
 
 ## Agent response contracts
 
