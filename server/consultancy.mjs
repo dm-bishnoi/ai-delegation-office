@@ -6,6 +6,10 @@ export const discoveryQuestions = [
   { key: 'outcome', question: 'What would a successful first version achieve?' },
   { key: 'constraints', question: 'Any deadline, budget, platform, or other constraints? (You can say “not decided”.)' },
 ];
+export const followUpQuestions = [
+  { key: 'scope', question: 'What must the first version include, and what should wait until later?' },
+  { key: 'success', question: 'How will you tell that the first version has worked?' },
+];
 
 function log(project, agent, message) {
   project.activity.unshift({ id: project.nextId++, agent, message, time: new Date().toISOString() });
@@ -28,10 +32,10 @@ export function makeConsultancyProject(idea) {
 }
 
 export function answerDiscovery(project, answers) {
-  if (project?.mode !== 'consultancy' || project.discovery?.status !== 'questions') throw new ClientError(409, 'This project is not awaiting discovery answers.');
+  if (project?.mode !== 'consultancy' || !['questions', 'followup'].includes(project.discovery?.status)) throw new ClientError(409, 'This project is not awaiting discovery answers.');
   if (!answers || typeof answers !== 'object' || Array.isArray(answers)) throw new ClientError(400, 'Answer the discovery questions.');
   const merged = { ...project.discovery.answers };
-  for (const { key } of discoveryQuestions) {
+  for (const { key } of [...discoveryQuestions, ...followUpQuestions]) {
     const value = answers[key];
     if (value !== undefined) {
       if (typeof value !== 'string' || value.trim().length > 500) throw new ClientError(400, 'Each answer must be at most 500 characters.');
@@ -45,9 +49,19 @@ export function answerDiscovery(project, answers) {
     log(project, 'lead', missing.length ? `Saved discovery answers. ${missing.length} question(s) remain.` : 'Please clarify the audience, problem and goal before approving the brief. Constraints can stay undecided.');
     return project.discovery;
   }
+  if (project.discovery.status === 'questions') {
+    project.discovery.status = 'followup';
+    log(project, 'lead', 'The core answers are saved. Nova has two final scope and success questions.');
+    return project.discovery;
+  }
+  const pending = followUpQuestions.filter(item => !merged[item.key]);
+  if (pending.length) {
+    log(project, 'lead', `Saved follow-up answers. ${pending.length} remain.`);
+    return project.discovery;
+  }
   project.discovery.brief = [
     `Original idea: ${project.brief}`,
-    ...discoveryQuestions.map(({ key, question }) => `${question}\n${merged[key]}`),
+    ...[...discoveryQuestions, ...followUpQuestions].map(({ key, question }) => `${question}\n${merged[key]}`),
     'An answer of “unknown” or “not decided” remains an explicit assumption to confirm during later review.',
   ].join('\n\n');
   project.discovery.status = 'review';
