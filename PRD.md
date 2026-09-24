@@ -1,6 +1,6 @@
 # Relay Office — AI project consultancy
 
-Status: product direction with an implemented local consultancy flow. The app now has saved four-question discovery, brief approval, optional search snippets/research plan, approval-gated requirements/design/review, a structural wireframe, 2D office and optional versioned single-file website. Dynamic follow-up interviews, verified page research, raster image generation and multi-file implementation remain planned.
+Status: product direction with an implemented local consultancy flow. The app now has saved four-question discovery plus two follow-ups, brief approval, optional search snippets/research plan, approval-gated requirements/design/review, a structural wireframe, 2D office and optional versioned single-file website. AI-generated follow-up interviews, verified page research, raster image generation and multi-file implementation remain planned.
 
 ## Product outcome
 
