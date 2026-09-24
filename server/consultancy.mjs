@@ -61,7 +61,10 @@ export function answerDiscovery(project, answers) {
   }
   project.discovery.brief = [
     `Original idea: ${project.brief}`,
-    ...[...discoveryQuestions, ...followUpQuestions].map(({ key, question }) => `${question}\n${merged[key]}`),
+    ...[...discoveryQuestions, ...followUpQuestions].map(({ key, question }) => {
+      const tailored = [...(project.discovery.questions || []), ...(project.discovery.followUpQuestions || [])].find(item => item.key === key);
+      return `${tailored?.question || question}\n${merged[key]}`;
+    }),
     'An answer of “unknown” or “not decided” remains an explicit assumption to confirm during later review.',
   ].join('\n\n');
   project.discovery.status = 'review';
