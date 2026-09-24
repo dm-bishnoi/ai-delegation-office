@@ -12,6 +12,8 @@ test('discovery saves partial answers and gates each approved stage without brea
   answerDiscovery(project, { problem: 'unknown', outcome: 'Show case studies', constraints: 'Not decided' });
   assert.equal(project.discovery.status, 'questions');
   answerDiscovery(project, { problem: 'Hard to present work', outcome: 'Show case studies', constraints: 'Not decided' });
+  assert.equal(project.discovery.status, 'followup');
+  answerDiscovery(project, { scope: 'Case studies and contact; booking later', success: 'Five qualified inquiries' });
   assert.equal(project.discovery.status, 'review');
   assert.match(project.discovery.brief, /Freelancers/);
   decideBrief(project, 'approve');
@@ -40,6 +42,7 @@ test('discovery saves partial answers and gates each approved stage without brea
 test('wireframe escapes all project and provider text and stays a preview, not a claimed image', async () => {
   const project = makeConsultancyProject('<script>alert(1)</script>');
   answerDiscovery(project, { audience: '<img src=x onerror=alert(1)>', problem: 'Example', outcome: 'Portfolio', constraints: 'none' });
+  answerDiscovery(project, { scope: 'Case studies first, payments later', success: 'Visitors can contact us' });
   decideBrief(project, 'approve');
   project.tasks[2].status = 'active';
   completeConsultancyTask(project, project.tasks[2], '- <script>alert(2)</script> a sufficiently long text for a card');
