@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rename, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -60,6 +60,39 @@ test('legacy workspace migrates without losing data and interrupted tasks become
     assert.equal(loaded.projects.length, 2);
     assert.equal(loaded.projects[0].tasks[0].status, 'failed');
     assert.equal(projectSummaries(loaded).length, 2);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test('project save retries a transient Windows file lock and leaves no temporary files', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'relay-rename-'));
+  const path = join(dir, 'projects.json');
+  const initial = { activeProjectId: null, projects: [] };
+  const updated = { activeProjectId: 'new', projects: [{ id: 'new' }] };
+  try {
+    await saveStore(initial, path);
+    let attempts = 0;
+    await saveStore(updated, path, { retryDelayMs: 0, renameFile: async (source, destination) => {
+      if (++attempts < 3) throw Object.assign(new Error('Temporary lock'), { code: 'EPERM' });
+      return rename(source, destination);
+    } });
+    assert.equal(attempts, 3);
+    assert.deepEqual(JSON.parse(await readFile(path, 'utf8')), updated);
+    assert.deepEqual(await readdir(dir), ['projects.json']);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test('a persistent rename error keeps the previously saved project file intact', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'relay-locked-'));
+  const path = join(dir, 'projects.json');
+  const original = { activeProjectId: 'saved', projects: [{ id: 'saved' }] };
+  try {
+    await saveStore(original, path);
+    await assert.rejects(saveStore({ activeProjectId: null, projects: [] }, path, {
+      retryDelayMs: 0, maxRenameRetries: 2,
+      renameFile: async () => { throw Object.assign(new Error('Destination locked'), { code: 'EPERM' }); },
+    }), error => error.code === 'STORE_BUSY' && /Close duplicate app processes/.test(error.message));
+    assert.deepEqual(JSON.parse(await readFile(path, 'utf8')), original);
+    assert.deepEqual(await readdir(dir), ['projects.json']);
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
 
