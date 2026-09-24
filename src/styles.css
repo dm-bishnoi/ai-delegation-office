@@ -243,6 +243,12 @@ footer { display: flex; padding: 40px 0 15px; color: #617074; font: 700 9px Manr
 .question-grid {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:15px;margin:20px 0;}
 .question-grid label,.revision-form label {font-weight:700;font-size:12px;line-height:1.45;color:#ebdfc8;}
 .question-grid textarea,.revision-form textarea {display:block;width:100%;min-height:83px;resize:vertical;background:#111a1d;border:1px solid #41504e;border-radius:6px;color:#eaeae4;padding:11px;margin-top:8px;font:12px/1.45 'DM Sans',sans-serif;}
+.question-field {min-width:0;}
+.question-options {display:flex;flex-wrap:wrap;gap:7px;margin:9px 0 5px;}
+.consultancy-section .question-options button {background:#283437;border:1px solid #4c605e;color:#e9dfc9;text-align:left;line-height:1.35;font-size:11px;font-weight:500;}
+.consultancy-section .question-options button[aria-pressed="true"] {border-color:#d6b785;background:#514c3e;color:#fff2d8;}
+.consultancy-section .question-refresh {margin-top:3px;background:transparent;color:#e1c89c;border:1px solid #856f51;}
+.consultancy-section .question-refresh:disabled {opacity:.55;cursor:not-allowed;}
 .consultancy-section button,.project-docs button,.design-result button,.revision-form button,.version-history button {background:#d6b785;color:#1b2423;border:0;border-radius:5px;font-weight:700;font-size:11px;padding:10px 13px;cursor:pointer;}
 .consultancy-section pre,.research-result pre {white-space:pre-wrap;overflow:auto;max-height:400px;background:#11191c;color:#dee2db;padding:16px;border-radius:5px;line-height:1.6;font-size:12px;}
 .research-result ul {padding-left:20px;}
