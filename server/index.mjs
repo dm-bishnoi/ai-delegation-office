@@ -4,7 +4,7 @@ import { readFile, stat } from 'node:fs/promises';
 import { extname, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ClientError, completeTask, decide, failTask, nextTask, retry } from './workflow.mjs';
-import { generate, generateWebsite, listModels, testConnection } from './provider.mjs';
+import { generate, generateDiscoveryQuestions, generateWebsite, listModels, testConnection } from './provider.mjs';
 import { activeProviderEnv, activeProviderInfo, loadProviderSettings, publicProviderSettings,
   removeProvider, saveProvider, saveProviderSettings, selectProvider, setProviderFallback } from './provider-settings.mjs';
 import { loadStore, projectSummaries, saveStore } from './store.mjs';
@@ -140,6 +140,28 @@ const server = createServer(async (req, res) => {
       if (pathname === '/api/discovery/answers') {
         const project = requireActive(body?.projectId);
         answerDiscovery(project, body?.answers);
+        await saveStore(catalog);
+        return json(res, 200, snapshot());
+      }
+      if (pathname === '/api/discovery/questions') {
+        const project = requireActive(body?.projectId);
+        const stage = project.discovery?.status;
+        if (project.mode !== 'consultancy' || !['questions', 'followup'].includes(stage)) throw new ClientError(409, 'This project is not awaiting discovery questions.');
+        if (!activeProviderInfo(providerSettings).configured) throw new ClientError(503, 'Connect an AI provider to ask Nova tailored questions. You can still answer the guided questions.');
+        operation = { type: 'discovery', projectId: project.id, stage };
+        let result;
+        try {
+          result = await generateDiscoveryQuestions(project, stage, { env: await activeProviderEnv(providerSettings), onAttempt: progress => {
+            operation = { type: 'discovery', projectId: project.id, stage, ...progress,
+              readyAt: progress.phase === 'waiting' ? Date.now() + progress.delayMs : null,
+              deadlineAt: progress.phase === 'running' ? Date.now() + progress.timeoutMs : null };
+          } });
+        } catch (cause) { throw new ClientError(502, `${cause instanceof Error ? cause.message : 'Could not prepare questions.'} Your saved answers are safe; use the guided questions or retry.`); }
+        project.discovery[stage === 'questions' ? 'questions' : 'followUpQuestions'] = result.questions;
+        project.discovery[stage === 'questions' ? 'questionModel' : 'followUpModel'] = result.model;
+        project.activity.unshift({ id: project.nextId++, agent: 'lead', message: 'Nova prepared project-specific discovery questions and answer suggestions.', time: new Date().toISOString() });
+        project.activity = project.activity.slice(0, 100);
+        touch(project);
         await saveStore(catalog);
         return json(res, 200, snapshot());
       }
