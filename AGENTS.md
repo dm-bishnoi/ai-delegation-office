@@ -21,7 +21,7 @@ Applies to this repository. Read [PRD.md](PRD.md) for the product direction, [DE
 | Atlas / engineer | Approved scope and designs | Feasibility notes and, on request, editable implementation files | User inspects preview and files |
 | Echo / reviewer | Prior artifacts and stated criteria | Concrete findings, open issues, review decision | User resolves blockers |
 
-The current app has Nova, Mira, Atlas, and Echo. Nova owns the research task; the specialist is a proposed separate role. Discovery has four saved starter questions and two saved follow-up questions; website output remains a single editable HTML file. Do not imply an AI-generated interview, verified full-page research, raster image generation, or multi-file site is implemented.
+The current app has Nova, Mira, Atlas, and Echo. Nova owns the research task; the specialist is a proposed separate role. Discovery uses four starter and two follow-up answer slots; a connected provider can tailor their wording and suggested answers to the project and prior answers, while guided questions remain available when AI fails. Website output remains a single editable HTML file. Do not imply verified full-page research, raster image generation, or a multi-file site is implemented.
 
 ## Agent response contracts
 

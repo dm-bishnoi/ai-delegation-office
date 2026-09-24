@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { answerDiscovery, decideBrief, makeConsultancyProject, completeConsultancyTask } from './consultancy.mjs';
 import { collectResearch, researchPlan } from './research.mjs';
 import { decide, nextTask, retry, failTask } from './workflow.mjs';
+import { generateDiscoveryQuestions, parseDiscoveryQuestions } from './provider.mjs';
 
 test('discovery saves partial answers and gates each approved stage without breaking legacy projects', () => {
   const project = makeConsultancyProject('Portfolio website');
@@ -37,6 +38,40 @@ test('discovery saves partial answers and gates each approved stage without brea
   const restored = structuredClone(project);
   assert.equal(restored.tasks[1].status, 'review');
   assert.equal(restored.discovery.status, 'approved');
+});
+
+test('Nova tailors choices to the project and saved answers without replacing the answers', async () => {
+  const project = makeConsultancyProject('A pet grooming appointment app for neighborhood salons');
+  const env = { AI_BASE_URL: 'https://api.example.com/v1', AI_MODEL: 'test-model', AI_API_KEY: 'test-key' };
+  const fetchImpl = async (_url, options) => {
+    const request = JSON.parse(options.body);
+    assert.match(request.messages[1].content, /pet grooming appointment app/);
+    if (project.discovery.status === 'followup') assert.match(request.messages[1].content, /Salons with one to three groomers/);
+    const keys = project.discovery.status === 'questions' ? ['audience', 'problem', 'outcome', 'constraints'] : ['scope', 'success'];
+    return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ questions: keys.map(key => ({
+      key, question: `For pet grooming salons, what ${key} matters most?`, options: [`A concrete ${key} choice`, `A second ${key} choice`],
+    })) }) }, finish_reason: 'stop' }] }), { status: 200, headers: { 'content-type': 'application/json' } });
+  };
+  const first = await generateDiscoveryQuestions(project, 'questions', { env, fetchImpl });
+  assert.equal(first.model, 'test-model');
+  project.discovery.questions = first.questions;
+  answerDiscovery(project, { audience: 'Salons with one to three groomers', problem: 'Phone bookings get lost', outcome: 'Let clients book a slot', constraints: 'Not decided' });
+  assert.equal(project.discovery.status, 'followup');
+  const follow = await generateDiscoveryQuestions(project, 'followup', { env, fetchImpl });
+  project.discovery.followUpQuestions = follow.questions;
+  assert.equal(project.discovery.answers.audience, 'Salons with one to three groomers');
+  answerDiscovery(project, { scope: follow.questions[0].options[0], success: 'Five salons accept online appointments' });
+  assert.match(project.discovery.brief, /For pet grooming salons, what scope matters most/);
+  assert.match(project.discovery.brief, /A concrete scope choice/);
+});
+
+test('malformed suggested questions are rejected without changing a saved discovery project', () => {
+  const project = makeConsultancyProject('An appointment app');
+  answerDiscovery(project, { audience: 'Local salons' });
+  const before = structuredClone(project.discovery);
+  assert.throws(() => parseDiscoveryQuestions(JSON.stringify({ questions: [{ key: 'audience', question: 'Who?', options: ['Yes'] }] }), 'questions'), /incomplete/);
+  assert.throws(() => parseDiscoveryQuestions('```json\n{"questions": [}\n```', 'questions'), /invalid question data/);
+  assert.deepEqual(project.discovery, before);
 });
 
 test('wireframe escapes all project and provider text and stays a preview, not a claimed image', async () => {
