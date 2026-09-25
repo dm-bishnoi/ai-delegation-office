@@ -1,13 +1,13 @@
 # Relay Office architecture
 
-Status: implemented local consultancy workflow and longer-term migration targets. The local Node API, React/Vite client, illustrated 2D office and JSON store are implemented; hosted isolation, verified page research and image generation are future work.
+Status: implemented local consultancy workflow and longer-term migration targets. The local Node API, React/Vite client, interactive Three.js office and JSON store are implemented; hosted isolation, verified page research and image generation are future work.
 
-## Current system (v0.7.1)
+## Current system (v0.8.0)
 
 | Concern | Current module / behavior |
 | --- | --- |
 | UI and orchestration | `src/App.tsx`, `src/workflow.ts`; polls `/api/workspace`, renders tasks, review, saved project selector, and prototype preview |
-| Office | `src/OfficeScene.tsx`; responsive SVG/CSS illustrated people, selection and bubbles derived from task state |
+| Office | `src/OfficeScene.tsx`; procedural WebGL scene with orbit controls, human figures, operation-driven walking and gestures, and DOM bubbles/roster |
 | API | `server/index.mjs`; localhost `127.0.0.1`, JSON endpoints, one global in-memory busy flag, long-lived provider requests |
 | Workflow | `server/workflow.mjs`, `server/consultancy.mjs`; legacy tasks preserved, new projects add saved starter and follow-up discovery answers, optional AI-tailored question wording and answer suggestions, and four approval-gated consultancy assignments |
 | Research | `server/research.mjs`; optional Brave Search URLs and snippets, explicitly labeled as unverified, or a research plan without a search key |
@@ -51,7 +51,7 @@ Do not equate local encryption with user separation: anyone who controls the mac
 1. Confirm scope and design state contract; add migration tests for old projects. Document security threats and keep the API local.
 2. Implement saved discovery Q&A, structured brief and approvals. Separate durable project state from in-memory provider requests.
 3. Add source-backed research, requirements and design artifacts with versions and review; never substitute model prose for retrieved evidence or image files.
-4. Replace the 3D office with task-driven 2D characters and event-backed bubbles. Support text fallback and reduced motion.
+4. Keep the task-driven 3D characters and status bubbles aligned with server operation snapshots. Provide a textual fallback and reduced motion; improve authored assets and visual QA separately.
 5. Add resumable background jobs and editable website files/versions, safe preview, file download/ZIP, and selective regeneration.
 6. Only if hosting is approved, complete identity, authorization, storage, abuse controls, security headers, privacy requirements, and release gates above.
 

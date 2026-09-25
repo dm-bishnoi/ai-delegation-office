@@ -1,6 +1,6 @@
 # Relay Office
 
-An original 2D office for a four-agent, human-reviewed project consultancy. New projects begin with saved discovery questions and an approved brief, then move through research, requirements, design and review. The optional build produces a **single-file website prototype** using an OpenAI-compatible provider. Existing projects keep their original four tasks. The agents have no browser, terminal or image-generation access.
+An original interactive 3D office for a four-agent, human-reviewed project consultancy. New projects begin with saved discovery questions and an approved brief, then move through research, requirements, design and review. The optional build produces a **single-file website prototype** using an OpenAI-compatible provider. Existing projects keep their original four tasks. The agents have no browser, terminal or image-generation access.
 
 ## Local setup
 
@@ -45,7 +45,9 @@ Visit Vite's displayed URL. The script runs the browser UI and the local Node AP
 4. Provider errors leave the assignment in **Needs attention** with a retry button. Projects and activity history are saved in `data/projects.json` and restored after a restart. Existing `data/workspace.json` data from v0.2 is imported automatically and kept as a backup. An interrupted in-flight task becomes retryable.
 5. In **Project deliverables**, open each **Read deliverable**, download the named working documents, and preview the wireframe. Once all tasks are approved, **Generate website prototype** creates one `index.html` containing HTML, CSS and optional JavaScript. Preview, inspect source or download it. Enter revision feedback to save the previous version and generate a new version. An older completed project can build without rerunning its four tasks.
 
-The 2D office illustrates four people with role-specific work areas. Their short bubbles reflect actual task and discovery states; gestures animate only while that person has an active assignment. Select a person in the office or sidebar for details. Reduced-motion settings stop the gestures.
+The Three.js office shows four stylized human figures in one room. Drag to orbit, scroll to zoom, and select a person in the scene, roster, or sidebar for details. A character walks to a work spot and uses a small work gesture only while its server operation is running; waiting to retry, failed, queued, and completed states stop the work gesture. Bubbles show public task states, not model reasoning. The roster and task board remain available without WebGL, and reduced-motion settings suppress walking and work gestures. The scene uses procedural geometry; it is not a photorealistic animation or an autonomous agent runtime.
+
+Saved projects remain in the sidebar. Open one and use the saved-project checkpoint to jump to the appropriate discovery, review, retry, or next-task control. This action never starts a provider request by itself; use **Step** or **Run team** when you want to run the next task.
 
 The model produces written plans and, on explicit request, HTML source for a standalone website prototype. The prototype is saved inside `data/projects.json` along with the project; no website directory is created until you download `index.html` from the browser. The model does **not** run the generated code, browse websites, test the result, or deploy it. Preview runs in a sandboxed iframe, and downloaded source requires your review before publication. Run/pause controls do not cancel an in-flight provider request; pause takes effect after it returns.
 
@@ -68,7 +70,7 @@ An HTTP 429 can mean a temporary rate limit or exhausted API credits/account lim
 
 - Multiple saved projects in one local workspace, bound to `127.0.0.1`. There is no login, multi-user isolation, hosted database, or deployment hardening. Do not expose the Node API to the public internet.
 - The API key remains on the Node server; only provider readiness and model name are sent to the browser. Briefs and outputs are stored locally in `data/`, which is gitignored.
-- Office people and desks are original SVG/CSS drawn in the app. No source or noncommercial assets from [The Delegation](https://github.com/arturitu/the-delegation) are included. No license has been selected for this repository.
+- Office people and desks are original procedural Three.js geometry drawn in the app. No source or noncommercial assets from [The Delegation](https://github.com/arturitu/the-delegation) are included. No license has been selected for this repository.
 
 ## Next milestones
 

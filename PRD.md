@@ -1,10 +1,10 @@
 # Relay Office — AI project consultancy
 
-Status: product direction with an implemented local consultancy flow. The app now has four starter and two follow-up discovery answer slots with AI-tailored wording and selectable suggestions when a provider is connected, guided fallback questions, brief approval, optional search snippets/research plan, approval-gated requirements/design/review, a structural wireframe, 2D office and optional versioned single-file website. Open-ended conversational interviewing, verified page research, raster image generation and multi-file implementation remain planned.
+Status: product direction with an implemented local consultancy flow. The app now has four starter and two follow-up discovery answer slots with AI-tailored wording and selectable suggestions when a provider is connected, guided fallback questions, brief approval, optional search snippets/research plan, approval-gated requirements/design/review, a structural wireframe, 3D office and optional versioned single-file website. Open-ended conversational interviewing, verified page research, raster image generation and multi-file implementation remain planned.
 
 ## Product outcome
 
-Help a person turn an uncertain product idea into an approved, evidence-backed brief, research report, requirements, visual design, and, optionally, an editable website prototype. Every useful result must remain visible and resumable in its project. The 2D office makes actual work understandable; it is not the source of truth for progress.
+Help a person turn an uncertain product idea into an approved, evidence-backed brief, research report, requirements, visual design, and, optionally, an editable website prototype. Every useful result must remain visible and resumable in its project. The 3D office makes actual work understandable; it is not the source of truth for progress.
 
 ## Primary user
 
@@ -50,7 +50,7 @@ Adapt a small, reviewed selection of [agency-agents](https://github.com/msitarze
 
 ### Slice 3 — office and build
 
-- Replace the current Three.js isometric office with a straight-on, 2D illustrated office. Agents have distinguishable poses for interviewing, researching, designing, building, reviewing, waiting, failed, and done.
+- Show one shared 3D office with four human-proportioned stylized figures. The implemented figures move toward assigned work spots and gesture only during server operations; waiting, review, failure, and completion appear in status bubbles and the roster. Cinematic asset fidelity and rigged character animation remain future art-direction work.
 - Status bubbles show short, server-backed activity summaries. Animated dots mean only “request in progress”; never expose private model reasoning or pretend to stream thoughts.
 - Agent movement follows actual task transitions; a paused, queued, or failed job cannot appear to be actively building.
 - Optional implementation produces versioned editable files and a sandboxed preview, starting from approved outputs.
