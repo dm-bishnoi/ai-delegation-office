@@ -9,6 +9,19 @@ export interface Agent {
   initials: string;
 }
 
+export interface ProviderAttempt {
+  attempt: number;
+  requestedModel: string;
+  responseModel: string | null;
+  httpStatus: number | null;
+  errorClass: string;
+  finishReason: string | null;
+  requestedMaxTokens: number;
+  usage: { promptTokens: number | null; completionTokens: number | null; totalTokens: number | null; reasoningTokens: number | null } | null;
+  contentState: string;
+  reason: string;
+}
+
 export interface Task {
   id: number;
   title: string;
@@ -21,6 +34,7 @@ export interface Task {
   feedback?: string;
   approvedAt?: string;
   revisions?: { content: string; replacedAt: string }[];
+  providerAttempts?: ProviderAttempt[];
 }
 
 export interface Entry {
@@ -37,7 +51,7 @@ export interface Workspace {
   brief: string;
   mode?: 'consultancy';
   discovery?: { status: 'questions' | 'followup' | 'review' | 'approved'; answers: Record<string, string>; brief: string;
-    questions?: DiscoveryQuestion[]; followUpQuestions?: DiscoveryQuestion[]; questionModel?: string; followUpModel?: string };
+    questions?: DiscoveryQuestion[]; followUpQuestions?: DiscoveryQuestion[]; questionModel?: string; followUpModel?: string; questionAttempts?: ProviderAttempt[] };
   research?: { status: 'unavailable' | 'empty' | 'snippets'; searchedAt: string | null; reason?: string; query?: string; sources: { title: string; url: string; excerpt: string }[] };
   designPreview?: { filename: string; content: string; kind: string; createdAt: string; stale?: boolean };
   tasks: Task[];
@@ -49,6 +63,7 @@ export interface Workspace {
   websiteFeedback?: string;
   websiteDraft?: { body?: string; css?: string; model?: string; attempts?: number };
   websiteError?: string;
+  websiteAttempts?: ProviderAttempt[];
 }
 
 export interface DiscoveryQuestion { key: string; question: string; options: string[] }

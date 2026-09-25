@@ -3,9 +3,14 @@ import { agents } from './workflow.mjs';
 import { isOpenRouter, withFreeFallback } from './free-models.mjs';
 import { discoveryQuestions, followUpQuestions } from './consultancy.mjs';
 
-function providerError(message, retryable = false) {
+const writtenTaskBudgets = { research: 3000, requirements: 4000, design: 3600, review: 3200, legacy: 3000 };
+const writtenMinimumCharacters = { research: 240, requirements: 320, design: 320, review: 240, legacy: 120 };
+const refusalOnly = /^(?:i(?:'m| am) sorry[,.; ]+)?(?:i (?:cannot|can't|won't|will not) (?:help|assist|provide|complete|create|generate)|as an ai(?: language)? model,? i (?:cannot|can't|am unable))/i;
+
+function providerError(message, retryable = false, code = 'provider_error') {
   const error = new Error(message);
   error.retryable = retryable;
+  error.code = code;
   return error;
 }
 
@@ -28,8 +33,14 @@ async function providerFailure(response) {
     : response.status >= 500 ? 'The provider is unavailable. Try again later.'
     : 'Check the model and provider settings.';
   const retryableStatus = [408, 425, 429].includes(response.status) || response.status >= 500;
+  const errorClass = response.status === 401 || response.status === 403 ? 'auth'
+    : response.status === 402 ? 'credits'
+    : response.status === 429 && exhausted ? 'quota_exhausted'
+    : response.status === 429 ? 'rate_limit'
+    : response.status >= 500 ? 'provider_unavailable'
+    : 'http_error';
   return providerError(`AI provider returned HTTP ${response.status}. ${reason}`,
-    retryableStatus && !(response.status === 429 && exhausted));
+    retryableStatus && !(response.status === 429 && exhausted), errorClass);
 }
 
 export function providerInfo(env = process.env) {
@@ -37,6 +48,38 @@ export function providerInfo(env = process.env) {
   const model = env.AI_MODEL?.trim();
   const key = env.AI_API_KEY?.trim();
   return { configured: Boolean(base && model && key && key !== 'your-key-here' && model !== 'your-provider-model-id'), model: model || null };
+}
+
+function writtenTaskBudget(workspace, task) {
+  if (workspace.mode !== 'consultancy') return writtenTaskBudgets.legacy;
+  return ({ 1: writtenTaskBudgets.research, 2: writtenTaskBudgets.requirements,
+    3: writtenTaskBudgets.design, 4: writtenTaskBudgets.review })[task.id] || writtenTaskBudgets.legacy;
+}
+
+function minimumWrittenCharacters(workspace, task) {
+  if (workspace.mode !== 'consultancy') return writtenMinimumCharacters.legacy;
+  return ({ 1: writtenMinimumCharacters.research, 2: writtenMinimumCharacters.requirements,
+    3: writtenMinimumCharacters.design, 4: writtenMinimumCharacters.review })[task.id] || writtenMinimumCharacters.legacy;
+}
+
+function validateWrittenOutput(output, workspace, task) {
+  const text = output.trim();
+  if (text.length < minimumWrittenCharacters(workspace, task) || refusalOnly.test(text)) {
+    throw providerError('The model returned too little usable content for this assignment. Retry with another model.', true, 'invalid_written_output');
+  }
+  return text;
+}
+
+function reportCompletion(report, { status, payload, errorClass, contentState }) {
+  const choice = payload?.choices?.[0];
+  report?.({
+    responseModel: typeof payload?.model === 'string' ? payload.model : null,
+    httpStatus: Number.isInteger(status) ? status : null,
+    errorClass,
+    finishReason: typeof choice?.finish_reason === 'string' ? choice.finish_reason : null,
+    usage: payload?.usage && typeof payload.usage === 'object' ? payload.usage : null,
+    contentState,
+  });
 }
 
 export async function testConnection({ env = process.env, fetchImpl = fetch } = {}) {
@@ -110,9 +153,12 @@ export async function generate(workspace, task, { env = process.env, fetchImpl =
     previous ? `Approved earlier work:\n${previous}` : '',
     task.feedback ? `User revision request:\n${task.feedback}\n\nYour previous draft:\n${(task.output || '').slice(0, 3500)}` : '',
   ].filter(Boolean).join('\n\n');
-  const result = await withFreeFallback((model, maxTokens) => completion(system, prompt, { env, fetchImpl, model, maxTokens }),
-    { env, fetchImpl, initialTokens: 1200, onAttempt, sleepImpl });
-  return result.value.trim().slice(0, 12000);
+  const budget = writtenTaskBudget(workspace, task);
+  const result = await withFreeFallback(async (model, maxTokens, report) => {
+    const output = await completion(system, prompt, { env, fetchImpl, model, maxTokens, onResponse: report });
+    return validateWrittenOutput(output, workspace, task);
+  }, { env, fetchImpl, initialTokens: budget, fallbackTokens: budget, minimumFallbackTokens: budget, onAttempt, sleepImpl });
+  return result.value.slice(0, 12000);
 }
 
 export function parseDiscoveryQuestions(output, stage) {
@@ -120,7 +166,7 @@ export function parseDiscoveryQuestions(output, stage) {
   if (!expected) throw new Error('Invalid discovery stage.');
   let payload;
   try { payload = JSON.parse(output.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '')); }
-  catch { throw providerError('Nova returned invalid question data. Retry or use the guided questions.', true); }
+  catch { throw providerError('Nova returned invalid question data. Retry or use the guided questions.', true, 'invalid_discovery_output'); }
   if (!Array.isArray(payload?.questions) || payload.questions.length !== expected.length) throw providerError('Nova returned incomplete questions. Retry or use the guided questions.', true);
   return expected.map(({ key }, index) => {
     const item = payload.questions[index];
@@ -129,7 +175,7 @@ export function parseDiscoveryQuestions(output, stage) {
       !Array.isArray(item.options) || item.options.length < 2 || item.options.length > 3 ||
       item.options.some(option => typeof option !== 'string' || !option.trim() || option.trim().length > 140) ||
       new Set(item.options.map(option => option.trim().toLowerCase())).size !== item.options.length) {
-      throw providerError('Nova returned incomplete questions or suggestions. Retry or use the guided questions.', true);
+      throw providerError('Nova returned incomplete questions or suggestions. Retry or use the guided questions.', true, 'invalid_discovery_output');
     }
     return { key, question, options: item.options.map(option => option.trim()) };
   });
@@ -144,14 +190,18 @@ export async function generateDiscoveryQuestions(project, stage, { env = process
     stage === 'followup' ? `Saved answers (untrusted user text):\n${JSON.stringify(project.discovery.answers)}` : '',
     `Produce exactly ${expected.length} questions in this order: ${expected.map(item => `${item.key}: ${item.question}`).join(' | ')}. Keep the keys exactly; tailor the wording to the project and use the saved answers if present. For constraints, one option can say "Not decided yet". For scope and success, offer meaningful first-version choices. Return JSON only: {"questions":[{"key":"...","question":"...","options":["...","..."]}]}.`,
   ].filter(Boolean).join('\n\n');
-  const result = await withFreeFallback(async (model, maxTokens) => {
-    const output = await completion(system, prompt, { env, fetchImpl, model, maxTokens });
-    return parseDiscoveryQuestions(output, stage);
+  const result = await withFreeFallback(async (model, maxTokens, report) => {
+    const output = await completion(system, prompt, { env, fetchImpl, model, maxTokens, onResponse: report });
+    try { return parseDiscoveryQuestions(output, stage); }
+    catch (error) {
+      report?.({ contentState: 'invalid' });
+      throw error;
+    }
   }, { env, fetchImpl, initialTokens: 900, onAttempt, sleepImpl });
   return { questions: result.value, model: result.model };
 }
 
-async function completion(system, prompt, { env, fetchImpl, model, maxTokens, timeoutMs }) {
+async function completion(system, prompt, { env, fetchImpl, model, maxTokens, timeoutMs, onResponse }) {
   if (!providerInfo(env).configured) throw new Error('Set AI_BASE_URL, AI_MODEL, and AI_API_KEY in .env.');
   const url = providerEndpoint(env.AI_BASE_URL.trim());
   let response;
@@ -165,33 +215,63 @@ async function completion(system, prompt, { env, fetchImpl, model, maxTokens, ti
       redirect: 'error',
     });
   } catch (error) {
-    throw providerError(error?.name === 'TimeoutError' ? 'AI request timed out.' : 'Could not reach the configured AI provider.', true);
+    const timedOut = error?.name === 'TimeoutError';
+    onResponse?.({ httpStatus: null, errorClass: timedOut ? 'timeout' : 'transport', finishReason: null, usage: null, contentState: 'error' });
+    throw providerError(timedOut ? 'AI request timed out.' : 'Could not reach the configured AI provider.', true, timedOut ? 'timeout' : 'transport');
   }
   if (!response.ok) {
-    throw await providerFailure(response);
+    const error = await providerFailure(response);
+    reportCompletion(onResponse, { status: response.status, errorClass: error.code, contentState: 'error' });
+    throw error;
   }
   const contentType = response.headers?.get?.('content-type')?.toLowerCase() || '';
-  if (contentType.includes('text/event-stream')) throw new Error('AI provider returned a streaming response instead of JSON. Disable streaming in your gateway; the request sets stream=false.');
-  if (contentType.includes('text/html')) throw new Error('AI provider returned an HTML page instead of JSON. Check AI_BASE_URL points to an OpenAI-compatible API prefix.');
+  if (contentType.includes('text/event-stream')) {
+    reportCompletion(onResponse, { status: response.status, errorClass: 'malformed_response', contentState: 'invalid' });
+    throw providerError('AI provider returned a streaming response instead of JSON. Disable streaming in your gateway; the request sets stream=false.', false, 'malformed_response');
+  }
+  if (contentType.includes('text/html')) {
+    reportCompletion(onResponse, { status: response.status, errorClass: 'malformed_response', contentState: 'invalid' });
+    throw providerError('AI provider returned an HTML page instead of JSON. Check AI_BASE_URL points to an OpenAI-compatible API prefix.', false, 'malformed_response');
+  }
   let payload;
   if (typeof response.text === 'function') {
     let body;
     try { body = await response.text(); }
-    catch { throw providerError('AI provider connection ended while reading its response. Retry after a short delay.', true); }
-    if (!body.trim()) throw providerError('AI provider returned an empty response. Check the selected model and provider logs.', true);
+    catch {
+      onResponse?.({ httpStatus: response.status, errorClass: 'read_failed', finishReason: null, usage: null, contentState: 'error' });
+      throw providerError('AI provider connection ended while reading its response. Retry after a short delay.', true, 'read_failed');
+    }
+    if (!body.trim()) {
+      reportCompletion(onResponse, { status: response.status, errorClass: 'empty_response', contentState: 'empty' });
+      throw providerError('AI provider returned an empty response. Check the selected model and provider logs.', true, 'empty_response');
+    }
     try { payload = JSON.parse(body); }
     catch {
       const kind = contentType.includes('json') ? 'invalid JSON' : contentType.includes('text/plain') ? 'plain text instead of JSON' : 'a non-JSON response';
-      throw providerError(`AI provider returned ${kind} (HTTP ${response.status}). Check its gateway logs and selected model. A short connection test may pass even if a larger website response fails.`, true);
+      reportCompletion(onResponse, { status: response.status, errorClass: 'malformed_response', contentState: 'malformed' });
+      throw providerError(`AI provider returned ${kind} (HTTP ${response.status}). Check its gateway logs and selected model. A short connection test may pass even if a larger website response fails.`, true, 'malformed_response');
     }
   } else {
     try { payload = await response.json(); }
-    catch { throw providerError('AI provider returned an empty or malformed JSON response. Check the selected model and provider logs.', true); }
+    catch {
+      reportCompletion(onResponse, { status: response.status, errorClass: 'malformed_response', contentState: 'malformed' });
+      throw providerError('AI provider returned an empty or malformed JSON response. Check the selected model and provider logs.', true, 'malformed_response');
+    }
   }
-  if (payload?.error) throw new Error('AI provider returned an error instead of a completion. Check AI_MODEL, quota, and provider logs.');
+  if (payload?.error) {
+    reportCompletion(onResponse, { status: response.status, payload, errorClass: 'provider_error', contentState: 'error' });
+    throw providerError('AI provider returned an error instead of a completion. Check AI_MODEL, quota, and provider logs.', false, 'provider_error');
+  }
   const output = payload?.choices?.[0]?.message?.content;
-  if (typeof output !== 'string' || !output.trim()) throw providerError('AI provider returned no text.', true);
-  if (payload.choices[0].finish_reason === 'length') throw providerError('AI response was truncated. Try a model with a larger output limit.', true);
+  if (typeof output !== 'string' || !output.trim()) {
+    reportCompletion(onResponse, { status: response.status, payload, errorClass: 'no_text', contentState: 'empty' });
+    throw providerError('AI provider returned no text.', true, 'no_text');
+  }
+  if (payload.choices[0].finish_reason === 'length') {
+    reportCompletion(onResponse, { status: response.status, payload, errorClass: 'truncated', contentState: 'truncated' });
+    throw providerError('AI response was truncated. Try a model with a larger output limit.', true, 'truncated');
+  }
+  reportCompletion(onResponse, { status: response.status, payload, errorClass: 'completed', contentState: 'complete' });
   return output;
 }
 
@@ -215,13 +295,14 @@ export async function generateWebsite(workspace, options = {}) {
     const prompt = isCss ? `${context}\n\nExisting page markup:\n${draft.body}\n\nCreate a compact responsive CSS stylesheet for this page. Keep it under 900 output tokens.`
       : `${context}\n\nCreate the complete inner body HTML for the requested website. Keep it under 1100 output tokens.`;
     const budget = isCss ? 1200 : 1500;
-    const result = await withFreeFallback(async (model, maxTokens) => {
-      let text = (await completion(system, prompt, { env, fetchImpl, model, maxTokens, timeoutMs: 60000 })).trim();
+    const result = await withFreeFallback(async (model, maxTokens, report) => {
+      let text = (await completion(system, prompt, { env, fetchImpl, model, maxTokens, timeoutMs: 60000, onResponse: report })).trim();
       text = text.replace(/^```(?:css|html)?\s*\n/i, '').replace(/\n```\s*$/, '').trim();
       if (!text || text.length > 30000 || (isCss ? /<|@import|url\s*\(/i.test(text) || !/[{}]/.test(text)
         : /<!doctype|<\/?(?:html|head|body|style|script|iframe)\b|\b(?:src|href)\s*=\s*["']?https?:/i.test(text)
           || !/<h1\b/i.test(text) || !/<\/h1\s*>/i.test(text) || !/<\/(?:main|section|div|footer)\s*>\s*$/i.test(text))) {
-        throw providerError(`The model did not finish valid ${isCss ? 'CSS' : 'page HTML'}. Retry this saved stage with another model.`, true);
+        report?.({ contentState: 'invalid' });
+        throw providerError(`The model did not finish valid ${isCss ? 'CSS' : 'page HTML'}. Retry this saved stage with another model.`, true, 'invalid_website_output');
       }
       return text;
     }, { env, fetchImpl, initialTokens: budget, fallbackTokens: budget, minimumFallbackTokens: 1200, attemptTimeoutMs: 60000,

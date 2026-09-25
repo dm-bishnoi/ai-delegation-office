@@ -156,7 +156,12 @@ const server = createServer(async (req, res) => {
               readyAt: progress.phase === 'waiting' ? Date.now() + progress.delayMs : null,
               deadlineAt: progress.phase === 'running' ? Date.now() + progress.timeoutMs : null };
           } });
-        } catch (cause) { throw new ClientError(502, `${cause instanceof Error ? cause.message : 'Could not prepare questions.'} Your saved answers are safe; use the guided questions or retry.`); }
+        } catch (cause) {
+          if (Array.isArray(cause?.attemptHistory)) project.discovery.questionAttempts = cause.attemptHistory;
+          await saveStore(catalog);
+          throw new ClientError(502, `${cause instanceof Error ? cause.message : 'Could not prepare questions.'} Your saved answers are safe; use the guided questions or retry.`);
+        }
+        delete project.discovery.questionAttempts;
         project.discovery[stage === 'questions' ? 'questions' : 'followUpQuestions'] = result.questions;
         project.discovery[stage === 'questions' ? 'questionModel' : 'followUpModel'] = result.model;
         project.activity.unshift({ id: project.nextId++, agent: 'lead', message: 'Nova prepared project-specific discovery questions and answer suggestions.', time: new Date().toISOString() });
@@ -194,7 +199,7 @@ const server = createServer(async (req, res) => {
           if (project.mode === 'consultancy') completeConsultancyTask(project, task, output);
           else completeTask(project, task, output);
         } catch (error) {
-          failTask(project, task, error instanceof Error ? error.message : 'AI request failed.');
+          failTask(project, task, error instanceof Error ? error.message : 'AI request failed.', error?.attemptHistory);
         }
         touch(project);
         await saveStore(catalog);
@@ -209,12 +214,14 @@ const server = createServer(async (req, res) => {
         }
         operation = { type: 'website', projectId: project.id };
         delete project.websiteError;
+        delete project.websiteAttempts;
         let artifact;
         try { artifact = await generateWebsite(project, { env: await activeProviderEnv(providerSettings), onAttempt: progress => { operation = { type: 'website', projectId: project.id, ...progress,
           readyAt: progress.phase === 'waiting' ? Date.now() + progress.delayMs : null,
           deadlineAt: progress.phase === 'running' ? Date.now() + progress.timeoutMs : null }; }, onCheckpoint: async () => { touch(project); await saveStore(catalog); } }); }
         catch (cause) {
           project.websiteError = cause instanceof Error ? cause.message : 'Could not generate website.';
+          if (Array.isArray(cause?.attemptHistory)) project.websiteAttempts = cause.attemptHistory;
           touch(project);
           await saveStore(catalog);
           throw new ClientError(502, project.websiteError);
@@ -224,6 +231,7 @@ const server = createServer(async (req, res) => {
         completed.artifact = { ...artifact, version: (completed.artifactVersions?.length || 0) + 1, files: [{ filename: artifact.filename, content: artifact.content }] };
         delete completed.websiteDraft;
         delete completed.websiteError;
+        delete completed.websiteAttempts;
         completed.activity.unshift({ id: completed.nextId++, agent: 'build', message: 'Website prototype is ready to preview and download.', time: artifact.createdAt });
         completed.activity = completed.activity.slice(0, 100);
         touch(completed);

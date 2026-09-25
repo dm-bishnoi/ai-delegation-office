@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { eligibleFreeModels, withFreeFallback } from './free-models.mjs';
-import { generateDiscoveryQuestions, generateWebsite } from './provider.mjs';
+import { eligibleFreeModels, freeFallbackModels, withFreeFallback } from './free-models.mjs';
+import { generate, generateDiscoveryQuestions, generateWebsite } from './provider.mjs';
+import { makeConsultancyProject } from './consultancy.mjs';
 import { makeWorkspace } from './workflow.mjs';
 
 const env = { AI_BASE_URL: 'https://openrouter.ai/api/v1', AI_MODEL: 'openrouter/free', AI_API_KEY: 'test-key' };
@@ -17,17 +18,93 @@ const project = () => {
   return workspace;
 };
 
-test('catalog only selects verified zero-price models with enough output capacity', () => {
+test('catalog accepts explicit free pricing without a request field and rejects unsafe candidates', () => {
+  const missingRequest = model('good/missing-request:free');
+  delete missingRequest.pricing.request;
+  const paidRequest = model('bad/request-paid:free', 16000, { prompt: '0', completion: '0', request: '0.001' });
+  const noText = model('bad/no-text:free');
+  noText.architecture.output_modalities = ['image'];
+  const noMaxTokens = model('bad/no-max-tokens:free');
+  noMaxTokens.supported_parameters = ['temperature'];
   const models = [model('bad/paid:free', 16000, { prompt: '0', completion: '0.001', request: '0' }),
     model('bad/empty:free', 16000, { prompt: '', completion: '0', request: '0' }),
-    model('bad/low:free', 4096), model('bad/no-suffix'), model('good/large:free'), model('good/medium:free', 8192)];
-  assert.deepEqual(eligibleFreeModels(models, 8000), ['good/large:free', 'good/medium:free']);
-  const unknown = model('good/unspecified:free');
+    model('bad/low:free', 4096), model('bad/no-suffix'), missingRequest, paidRequest, noText, noMaxTokens,
+    model('good/large:free'), model('good/medium:free', 8192)];
+  assert.deepEqual(eligibleFreeModels(models, 8000), ['good/missing-request:free', 'good/large:free', 'good/medium:free']);
+  assert.deepEqual(eligibleFreeModels([missingRequest, paidRequest, noText, noMaxTokens], 3000), ['good/missing-request:free']);
+  const unknown = model('bad/unknown:free');
   unknown.top_provider.max_completion_tokens = null;
-  assert.deepEqual(eligibleFreeModels([unknown, model('bad/too-small:free', 256)], 1200), ['good/unspecified:free']);
+  assert.deepEqual(eligibleFreeModels([unknown], 3000), []);
 });
 
-test('broken website response retries free models with a 1200-token cap for unknown output capacity', async () => {
+test('normal consultancy requirements use a larger task-aware budget and accept useful output', async () => {
+  const project = makeConsultancyProject('A service website');
+  project.discovery.status = 'approved';
+  project.discovery.brief = 'Build a clear service website for a small team.';
+  let requestedMaxTokens;
+  const result = await generate(project, project.tasks[1], {
+    env: { AI_BASE_URL: 'http://127.0.0.1:9999/v1', AI_API_KEY: 'test-key', AI_MODEL: 'test-model' },
+    fetchImpl: async (_url, options) => {
+      requestedMaxTokens = JSON.parse(options.body).max_tokens;
+      return { ok: true, json: async () => ({ choices: [{ message: { content: `Requirements include user journeys, prioritized scope, acceptance criteria, constraints, risks, open decisions, and implementation notes for the team. ${'Detailed delivery guidance. '.repeat(8)}` }, finish_reason: 'stop' }] }) };
+    },
+  });
+  assert.equal(requestedMaxTokens, 4000);
+  assert.match(result, /acceptance criteria/);
+});
+
+test('short and refusal-only written output is rejected before saving a deliverable', async () => {
+  const project = makeConsultancyProject('A service website');
+  project.discovery.status = 'approved';
+  project.discovery.brief = 'Build a clear service website for a small team.';
+  const env = { AI_BASE_URL: 'http://127.0.0.1:9999/v1', AI_API_KEY: 'test-key', AI_MODEL: 'test-model' };
+  const response = content => ({ ok: true, json: async () => ({ choices: [{ message: { content }, finish_reason: 'stop' }] }) });
+  await assert.rejects(generate(project, project.tasks[1], { env, fetchImpl: async () => response('Too short.') }), /too little usable content/);
+  await assert.rejects(generate(project, project.tasks[1], { env, fetchImpl: async () => response(`I cannot help with that. ${'Additional content '.repeat(20)}`) }), /too little usable content/);
+});
+
+test('fallback exhaustion preserves timeout, model, cap, finish reason, usage, and retry history', async () => {
+  const project = makeConsultancyProject('A service website');
+  project.discovery.status = 'approved';
+  project.discovery.brief = 'Build a clear service website for a small team.';
+  let calls = 0;
+  const fetchImpl = async (url, options) => {
+    if (new URL(url).pathname.endsWith('/models')) return { ok: true, json: async () => ({ data: [model('free/explicit:free', 8192)] }) };
+    calls += 1;
+    if (calls === 1) throw Object.assign(new Error('provider timeout'), { name: 'TimeoutError' });
+    const requested = JSON.parse(options.body);
+    return { ok: true, headers: { get: () => 'application/json' }, text: async () => JSON.stringify({
+      model: requested.model === 'free/explicit:free' ? 'free/explicit:free' : 'router/underlying:free',
+      usage: { prompt_tokens: 100, completion_tokens: requested.max_tokens, total_tokens: 100 + requested.max_tokens, completion_tokens_details: { reasoning_tokens: 20 } },
+      choices: [{ message: { content: 'partial' }, finish_reason: 'length' }],
+    }) };
+  };
+  await assert.rejects(generate(project, project.tasks[1], { env: { ...env, AI_MODEL: 'free/selected:free' }, fetchImpl, sleepImpl: async () => {} }), error => {
+    assert.match(error.message, /1: timeout/);
+    assert.match(error.message, /2: truncated at output limit/);
+    assert.match(error.message, /3: truncated at output limit/);
+    assert.deepEqual(error.attemptHistory.map(item => item.reason), ['timeout', 'truncated', 'truncated']);
+    assert.deepEqual(error.attemptHistory.map(item => item.requestedModel), ['free/selected:free', 'free/explicit:free', 'openrouter/free']);
+    assert.equal(error.attemptHistory[1].responseModel, 'free/explicit:free');
+    assert.equal(error.attemptHistory[1].requestedMaxTokens, 4000);
+    assert.equal(error.attemptHistory[1].finishReason, 'length');
+    assert.equal(error.attemptHistory[1].usage.completionTokens, 4000);
+    return true;
+  });
+});
+
+test('duplicate explicit catalog entries are not selected repeatedly', async () => {
+  const duplicate = model('free/duplicate:free', 4096);
+  const result = await freeFallbackModels({
+    env,
+    minOutputTokens: 3000,
+    excluded: ['openrouter/free'],
+    fetchImpl: async () => ({ ok: true, json: async () => ({ data: [duplicate, structuredClone(duplicate)] }) }),
+  });
+  assert.deepEqual(result, [{ id: 'free/duplicate:free', maxTokens: 4096 }, { id: 'openrouter/free', maxTokens: 3000 }]);
+});
+
+test('broken website response prefers explicit free models before the router', async () => {
   const attempts = [];
   const delays = [];
   const progress = [];
@@ -38,14 +115,14 @@ test('broken website response retries free models with a 1200-token cap for unkn
     }
     const request = JSON.parse(options.body);
     attempts.push(request.model);
-    assert.equal(request.max_tokens, attempts.length >= 3 ? 1200 : 1500);
+    assert.equal(request.max_tokens, attempts.length === 3 || attempts.length >= 4 ? 1200 : 1500);
     if (attempts.length === 1) return { ok: true, headers: { get: () => 'application/json' },
       text: async () => { throw Error('connection broke while reading body'); } };
     return { ok: attempts.length !== 2, status: attempts.length === 2 ? 429 : 200,
       json: async () => ({ choices: [{ message: { content: attempts.length === 4 ? css : body }, finish_reason: 'stop' }] }) };
   };
   const artifact = await generateWebsite(project(), { env, fetchImpl, sleepImpl: async ms => { delays.push(ms); }, onAttempt: status => progress.push(status) });
-  assert.deepEqual(attempts, ['openrouter/free', 'good/large:free', 'good/medium:free', 'openrouter/free']);
+  assert.deepEqual(attempts, ['openrouter/free', 'good/large:free', 'openrouter/free', 'openrouter/free']);
   assert.deepEqual(delays, [3000, 6000]);
   assert.equal(artifact.model, 'openrouter/free');
   assert.equal(artifact.attempts, 4);

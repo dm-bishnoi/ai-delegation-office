@@ -15,7 +15,7 @@ test('approval gates block downstream tasks and revision sends feedback to the p
   const fetchImpl = async (_url, options) => {
     assert.equal(options.headers.Authorization, 'Bearer test-key');
     prompt = JSON.parse(options.body).messages[1].content;
-    return { ok: true, json: async () => ({ choices: [{ message: { content: 'Initial plan' } }] }) };
+    return { ok: true, json: async () => ({ choices: [{ message: { content: `Initial plan with concrete scope, success criteria, risks, and implementation notes for the team. ${'Detailed delivery guidance. '.repeat(6)}` } }] }) };
   };
   completeTask(workspace, first, await generate(workspace, first, { env, fetchImpl }));
   assert.equal(first.status, 'review');
@@ -50,8 +50,10 @@ test('legacy workspace migrates without losing data and interrupted tasks become
     assert.throws(() => nextTask(restored), /Retry the failed/);
     retry(restored, task.id);
     const retried = nextTask(restored);
-    failTask(restored, retried, 'Provider error');
+    const providerAttempts = [{ attempt: 1, requestedModel: 'test-model', responseModel: 'test-model', httpStatus: 200, errorClass: 'timeout', finishReason: null, requestedMaxTokens: 3000, usage: null, contentState: 'error', reason: 'timeout' }];
+    failTask(restored, retried, 'Provider error', providerAttempts);
     assert.equal(retried.status, 'failed');
+    assert.deepEqual(retried.providerAttempts, providerAttempts);
     const second = makeWorkspace('A second project.');
     store.projects.push(second);
     store.activeProjectId = second.id;

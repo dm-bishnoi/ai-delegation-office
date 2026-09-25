@@ -36,9 +36,9 @@ test('provider connection is encrypted, survives restart, and routes task reques
       calls++;
       assert.equal(options.headers.Authorization, 'Bearer private-test-key');
       assert.equal(JSON.parse(options.body).model, 'test/free:free');
-      return { ok: true, json: async () => ({ choices: [{ message: { content: 'Done.' }, finish_reason: 'stop' }] }) };
+      return { ok: true, json: async () => ({ choices: [{ message: { content: `Done with a concrete plan, acceptance criteria, constraints, risks, and implementation notes for the team. ${'Detailed delivery guidance. '.repeat(6)}` }, finish_reason: 'stop' }] }) };
     };
-    assert.equal(await generate(workspace, nextTask(workspace), { env: active, fetchImpl }), 'Done.');
+    assert.match(await generate(workspace, nextTask(workspace), { env: active, fetchImpl }), /Done with a concrete plan/);
     assert.equal(calls, 1);
     assert.deepEqual(await testConnection({ env: active, fetchImpl }),
       { status: 'connected', model: 'test/free:free', check: 'credentials', freeRemaining: 3 });

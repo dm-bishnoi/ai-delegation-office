@@ -1,4 +1,53 @@
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
+const maxFallbacks = 2;
+
+const reasonLabels = {
+  timeout: 'timeout',
+  transport: 'transport failure',
+  read_failed: 'connection ended while reading response',
+  empty_response: 'empty response',
+  malformed_response: 'malformed response',
+  no_text: 'no text response',
+  truncated: 'truncated at output limit',
+  invalid_written_output: 'invalid written output',
+  invalid_discovery_output: 'invalid discovery output',
+  invalid_website_output: 'invalid website output',
+  auth: 'authentication or permissions',
+  credits: 'provider credits unavailable',
+  quota_exhausted: 'account quota exhausted',
+  rate_limit: 'rate limited',
+  provider_unavailable: 'provider unavailable',
+  invalid_config: 'invalid provider configuration',
+  http_error: 'provider HTTP error',
+  provider_error: 'provider error',
+};
+
+function safeNumber(value) {
+  return value != null && value !== '' && Number.isFinite(Number(value)) && Number(value) >= 0 ? Number(value) : null;
+}
+
+function safeUsage(usage) {
+  if (!usage || typeof usage !== 'object') return null;
+  const values = {
+    promptTokens: safeNumber(usage.prompt_tokens),
+    completionTokens: safeNumber(usage.completion_tokens),
+    totalTokens: safeNumber(usage.total_tokens),
+    reasoningTokens: safeNumber(usage.completion_tokens_details?.reasoning_tokens),
+  };
+  return Object.values(values).some(value => value !== null) ? values : null;
+}
+
+function attachHistory(error, history) {
+  error.attemptHistory = history.map(item => structuredClone(item));
+  return error;
+}
+
+function exhaustionError(history) {
+  const summary = history.map((item, index) => `${index + 1}: ${reasonLabels[item.reason] || 'generation failed'}`).join('; ');
+  const error = new Error(`AI generation failed after ${history.length} attempts. ${summary}.`);
+  error.code = 'fallback_exhausted';
+  return attachHistory(error, history);
+}
 
 export function isOpenRouter(base) {
   try {
@@ -7,20 +56,20 @@ export function isOpenRouter(base) {
   } catch { return false; }
 }
 
-// Verify current catalog pricing before every fallback. An unknown output limit is tried only at 1200 tokens.
 export function eligibleFreeModels(models, minOutputTokens, excluded = []) {
-  const freePrice = value => value != null && String(value).trim() !== '' && Number(value) === 0;
-  return (Array.isArray(models) ? models : [])
+  const zeroPrice = value => value != null && String(value).trim() !== '' && Number(value) === 0;
+  const sorted = (Array.isArray(models) ? models : [])
     .filter(model => typeof model?.id === 'string' && model.id.endsWith(':free') && !excluded.includes(model.id)
-      && ['prompt', 'completion', 'request'].every(field => freePrice(model.pricing?.[field]))
+      && zeroPrice(model.pricing?.prompt) && zeroPrice(model.pricing?.completion)
+      && (model.pricing?.request == null || String(model.pricing.request).trim() === '' || zeroPrice(model.pricing.request))
       && model.architecture?.input_modalities?.includes('text') && model.architecture?.output_modalities?.includes('text')
       && Number(model.context_length) >= 12000
-      && (model.top_provider?.max_completion_tokens == null ? minOutputTokens <= 1200
-        : Number(model.top_provider.max_completion_tokens) >= minOutputTokens)
-      && (!Array.isArray(model.supported_parameters) || model.supported_parameters.includes('max_tokens')))
-    .sort((a, b) => (Number(b.top_provider?.max_completion_tokens) || 0) - (Number(a.top_provider?.max_completion_tokens) || 0)
-      || b.context_length - a.context_length)
-    .map(model => model.id);
+      && Number.isFinite(Number(model.top_provider?.max_completion_tokens))
+      && Number(model.top_provider.max_completion_tokens) >= minOutputTokens
+      && Array.isArray(model.supported_parameters) && model.supported_parameters.includes('max_tokens'))
+    .sort((a, b) => Number(b.top_provider.max_completion_tokens) - Number(a.top_provider.max_completion_tokens)
+      || Number(b.context_length) - Number(a.context_length));
+  return sorted.filter((model, index) => sorted.findIndex(item => item.id === model.id) === index).map(model => model.id);
 }
 
 export async function freeFallbackModels({ env, fetchImpl, minOutputTokens, excluded = [] }) {
@@ -33,10 +82,10 @@ export async function freeFallbackModels({ env, fetchImpl, minOutputTokens, excl
   try { payload = await response.json(); }
   catch { throw new Error('OpenRouter free-model catalog returned invalid JSON.'); }
   if (!Array.isArray(payload?.data)) throw new Error('OpenRouter free-model catalog returned no model list.');
-  const eligible = eligibleFreeModels(payload.data, minOutputTokens, excluded).slice(0, 2);
-  const models = eligible.map(id => ({ id, maxTokens: Number(payload.data.find(model => model.id === id).top_provider?.max_completion_tokens) || 1200 }));
-  // OpenRouter documents this route as free-only. Use it when the catalog cannot name enough suitable models.
-  if (minOutputTokens <= 1200) while (models.length < 2) models.push({ id: 'openrouter/free', maxTokens: 1200 });
+  const catalog = new Map(payload.data.filter(model => typeof model?.id === 'string').map(model => [model.id, model]));
+  const models = eligibleFreeModels(payload.data, minOutputTokens, excluded).slice(0, maxFallbacks)
+    .map(id => ({ id, maxTokens: Number(catalog.get(id).top_provider.max_completion_tokens) }));
+  while (models.length < maxFallbacks) models.push({ id: 'openrouter/free', maxTokens: minOutputTokens });
   return models;
 }
 
@@ -44,32 +93,68 @@ export async function withFreeFallback(run, { env, fetchImpl, initialTokens, fal
   minimumFallbackTokens = fallbackTokens, attemptTimeoutMs, onAttempt = () => {}, sleepImpl = wait }) {
   const firstModel = env.AI_MODEL?.trim();
   if (!firstModel) throw new Error('Set AI_MODEL in .env.');
-  onAttempt({ model: firstModel, attempt: 1, total: 3, phase: 'running', timeoutMs: attemptTimeoutMs || (initialTokens > 1200 ? 120000 : 60000) });
-  try { return { value: await run(firstModel, initialTokens), model: firstModel, attempts: 1 }; }
-  catch (firstError) {
-    if (!firstError.retryable || !isOpenRouter(env.AI_BASE_URL?.trim()) || env.AI_FREE_FALLBACK?.trim().toLowerCase() === 'false') throw firstError;
-    let models;
-    try { models = await freeFallbackModels({ env, fetchImpl, minOutputTokens: minimumFallbackTokens, excluded: [firstModel] }); }
-    catch (error) {
-      if (minimumFallbackTokens > 1200) throw new Error(`${firstError.message} ${error.message}`);
-      // When catalog discovery fails, the provider's own free-only router can still try available models.
-      models = [{ id: 'openrouter/free', maxTokens: 1200 }, { id: 'openrouter/free', maxTokens: 1200 }];
-    }
-    if (!models.length) throw new Error(`${firstError.message} No free fallback is available for a ${minimumFallbackTokens}-token request. Choose another model in AI connections or retry later.`);
-    let lastError = firstError;
-    for (const [index, { id: model, maxTokens }] of models.entries()) {
-      const attempt = index + 2;
+  const history = [];
+  let models = [{ id: firstModel, maxTokens: initialTokens }];
+  for (let index = 0; index < models.length; index += 1) {
+    const fallback = models[index];
+    const attempt = index + 1;
+    const total = maxFallbacks + 1;
+    if (attempt > 1) {
       const delayMs = attempt === 2 ? 3000 : 6000;
-      onAttempt({ model, attempt, total: models.length + 1, phase: 'waiting', delayMs });
+      onAttempt({ model: fallback.id, attempt, total, phase: 'waiting', delayMs });
       await sleepImpl(delayMs);
-      const tokenLimit = Math.min(fallbackTokens, maxTokens);
-      onAttempt({ model, attempt, total: models.length + 1, phase: 'running', timeoutMs: attemptTimeoutMs || (tokenLimit > 1200 ? 120000 : 60000) });
-      try { return { value: await run(model, tokenLimit), model, attempts: attempt }; }
-      catch (error) {
-        lastError = error;
-        if (!error.retryable) throw error;
+    }
+    const tokenLimit = Math.min(fallbackTokens, fallback.maxTokens);
+    onAttempt({ model: fallback.id, attempt, total, phase: 'running', timeoutMs: attemptTimeoutMs || (tokenLimit > 1200 ? 120000 : 60000) });
+    const metadata = {};
+    try {
+      const value = await run(fallback.id, tokenLimit, report => Object.assign(metadata, report));
+      history.push({
+        attempt,
+        requestedModel: fallback.id,
+        responseModel: typeof metadata.responseModel === 'string' ? metadata.responseModel : null,
+        httpStatus: safeNumber(metadata.httpStatus),
+        errorClass: 'completed',
+        finishReason: typeof metadata.finishReason === 'string' ? metadata.finishReason : null,
+        requestedMaxTokens: tokenLimit,
+        usage: safeUsage(metadata.usage),
+        contentState: typeof metadata.contentState === 'string' ? metadata.contentState : 'complete',
+        reason: 'completed',
+      });
+      return { value, model: fallback.id, attempts: attempt, attemptHistory: history };
+    } catch (error) {
+      const reason = typeof error.code === 'string' ? error.code : 'provider_error';
+      history.push({
+        attempt,
+        requestedModel: fallback.id,
+        responseModel: typeof metadata.responseModel === 'string' ? metadata.responseModel : null,
+        httpStatus: safeNumber(metadata.httpStatus),
+        errorClass: reason,
+        finishReason: typeof metadata.finishReason === 'string' ? metadata.finishReason : null,
+        requestedMaxTokens: tokenLimit,
+        usage: safeUsage(metadata.usage),
+        contentState: typeof metadata.contentState === 'string' ? metadata.contentState : 'error',
+        reason,
+      });
+      if (!error.retryable) throw attachHistory(error, history);
+      if (attempt === 1) {
+        if (!isOpenRouter(env.AI_BASE_URL?.trim()) || env.AI_FREE_FALLBACK?.trim().toLowerCase() === 'false') throw attachHistory(error, history);
+        let candidates;
+        try { candidates = await freeFallbackModels({ env, fetchImpl, minOutputTokens: minimumFallbackTokens, excluded: [firstModel] }); }
+        catch { candidates = Array.from({ length: maxFallbacks }, () => ({ id: 'openrouter/free', maxTokens: minimumFallbackTokens })); }
+        const seen = new Set();
+        candidates = candidates.filter(item => {
+          if (item.id === firstModel && item.id !== 'openrouter/free') return false;
+          if (item.id === 'openrouter/free') return true;
+          if (seen.has(item.id)) return false;
+          seen.add(item.id);
+          return true;
+        });
+        if (!candidates.length) throw attachHistory(exhaustionError(history), history);
+        models = [{ id: firstModel, maxTokens: initialTokens }, ...candidates];
+        continue;
       }
     }
-    throw new Error(`Free-model fallback exhausted after ${models.length + 1} attempts. Last error: ${lastError.message}`);
   }
+  throw exhaustionError(history);
 }

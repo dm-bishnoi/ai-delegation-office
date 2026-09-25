@@ -44,6 +44,7 @@ export function nextTask(workspace) {
   if (!task) throw new ClientError(409, 'All tasks are complete.');
   task.status = 'active';
   task.error = undefined;
+  delete task.providerAttempts;
   entry(workspace, task.owner, `Started ${task.title.toLowerCase()}.`);
   return task;
 }
@@ -56,14 +57,16 @@ export function completeTask(workspace, task, output) {
   }
   task.output = output;
   task.feedback = undefined;
+  delete task.providerAttempts;
   task.status = task.requiresApproval ? 'review' : 'done';
   entry(workspace, task.owner, task.status === 'review' ? `${task.title} is awaiting your review.` : `${task.title} generated a deliverable.`);
 }
 
-export function failTask(workspace, task, error) {
+export function failTask(workspace, task, error, providerAttempts) {
   if (task.status !== 'active') return;
   task.status = 'failed';
   task.error = error;
+  if (Array.isArray(providerAttempts)) task.providerAttempts = providerAttempts;
   entry(workspace, task.owner, `${task.title} failed. Retry when ready.`);
 }
 

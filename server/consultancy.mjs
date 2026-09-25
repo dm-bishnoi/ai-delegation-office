@@ -50,6 +50,7 @@ export function answerDiscovery(project, answers) {
     return project.discovery;
   }
   if (project.discovery.status === 'questions') {
+    delete project.discovery.questionAttempts;
     project.discovery.status = 'followup';
     log(project, 'lead', 'The core answers are saved. Nova has two final scope and success questions.');
     return project.discovery;
@@ -67,6 +68,7 @@ export function answerDiscovery(project, answers) {
     }),
     'An answer of “unknown” or “not decided” remains an explicit assumption to confirm during later review.',
   ].join('\n\n');
+  delete project.discovery.questionAttempts;
   project.discovery.status = 'review';
   log(project, 'lead', 'Clarified brief is ready for your review.');
   return project.discovery;
@@ -75,6 +77,7 @@ export function answerDiscovery(project, answers) {
 export function decideBrief(project, decision) {
   if (project?.mode !== 'consultancy' || project.discovery?.status !== 'review') throw new ClientError(409, 'There is no brief awaiting approval.');
   if (!['approve', 'revise'].includes(decision)) throw new ClientError(400, 'Choose approve or revise.');
+  delete project.discovery.questionAttempts;
   project.discovery.status = decision === 'approve' ? 'approved' : 'questions';
   log(project, 'lead', decision === 'approve' ? 'You approved the clarified brief. Research is ready.' : 'You returned the brief to discovery. Your answers are saved.');
   return project.discovery;
