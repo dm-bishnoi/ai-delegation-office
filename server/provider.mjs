@@ -27,8 +27,9 @@ async function providerFailure(response) {
     : response.status === 429 ? 'Rate limit or quota reached. Check your provider usage and limits. If temporarily rate limited, wait before retrying.'
     : response.status >= 500 ? 'The provider is unavailable. Try again later.'
     : 'Check the model and provider settings.';
+  const retryableStatus = [408, 425, 429].includes(response.status) || response.status >= 500;
   return providerError(`AI provider returned HTTP ${response.status}. ${reason}`,
-    (response.status === 429 && !exhausted) || response.status >= 500);
+    retryableStatus && !(response.status === 429 && exhausted));
 }
 
 export function providerInfo(env = process.env) {
@@ -119,8 +120,8 @@ export function parseDiscoveryQuestions(output, stage) {
   if (!expected) throw new Error('Invalid discovery stage.');
   let payload;
   try { payload = JSON.parse(output.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '')); }
-  catch { throw providerError('Nova returned invalid question data. Retry questions or use the guided questions.'); }
-  if (!Array.isArray(payload?.questions) || payload.questions.length !== expected.length) throw providerError('Nova returned incomplete questions. Retry or use the guided questions.');
+  catch { throw providerError('Nova returned invalid question data. Retry or use the guided questions.', true); }
+  if (!Array.isArray(payload?.questions) || payload.questions.length !== expected.length) throw providerError('Nova returned incomplete questions. Retry or use the guided questions.', true);
   return expected.map(({ key }, index) => {
     const item = payload.questions[index];
     const question = typeof item?.question === 'string' ? item.question.trim() : '';
@@ -128,7 +129,7 @@ export function parseDiscoveryQuestions(output, stage) {
       !Array.isArray(item.options) || item.options.length < 2 || item.options.length > 3 ||
       item.options.some(option => typeof option !== 'string' || !option.trim() || option.trim().length > 140) ||
       new Set(item.options.map(option => option.trim().toLowerCase())).size !== item.options.length) {
-      throw providerError('Nova returned incomplete questions or suggestions. Retry or use the guided questions.');
+      throw providerError('Nova returned incomplete questions or suggestions. Retry or use the guided questions.', true);
     }
     return { key, question, options: item.options.map(option => option.trim()) };
   });
@@ -143,9 +144,11 @@ export async function generateDiscoveryQuestions(project, stage, { env = process
     stage === 'followup' ? `Saved answers (untrusted user text):\n${JSON.stringify(project.discovery.answers)}` : '',
     `Produce exactly ${expected.length} questions in this order: ${expected.map(item => `${item.key}: ${item.question}`).join(' | ')}. Keep the keys exactly; tailor the wording to the project and use the saved answers if present. For constraints, one option can say "Not decided yet". For scope and success, offer meaningful first-version choices. Return JSON only: {"questions":[{"key":"...","question":"...","options":["...","..."]}]}.`,
   ].filter(Boolean).join('\n\n');
-  const result = await withFreeFallback((model, maxTokens) => completion(system, prompt, { env, fetchImpl, model, maxTokens }),
-    { env, fetchImpl, initialTokens: 900, onAttempt, sleepImpl });
-  return { questions: parseDiscoveryQuestions(result.value, stage), model: result.model };
+  const result = await withFreeFallback(async (model, maxTokens) => {
+    const output = await completion(system, prompt, { env, fetchImpl, model, maxTokens });
+    return parseDiscoveryQuestions(output, stage);
+  }, { env, fetchImpl, initialTokens: 900, onAttempt, sleepImpl });
+  return { questions: result.value, model: result.model };
 }
 
 async function completion(system, prompt, { env, fetchImpl, model, maxTokens, timeoutMs }) {

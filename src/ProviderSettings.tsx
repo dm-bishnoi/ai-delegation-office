@@ -101,7 +101,7 @@ export default function ProviderSettings({ busy, onUpdate }: { busy: boolean; on
           </div>
         </div>)}
         {!settings?.providers.length && <p>No provider connected yet.</p>}
-        <p className="provider-hint">OpenRouter's key check validates your key without running a model. Other providers use a short AI request that may count toward quota. Neither check guarantees that a model can return a complete website. Free fallback applies only to exact OpenRouter connections; account-wide limits can still block retries.</p>
+        <p className="provider-hint">OpenRouter's key check validates your key without running a model. Other providers use a short AI request that may count toward quota. Neither check guarantees that a model can return a complete website. Free fallback applies only to exact OpenRouter connections and retries up to two verified zero-cost models after rate limits and recoverable errors; account-wide limits, invalid credentials, and configuration errors still require attention.</p>
       </div>
       <form className="provider-panel provider-form" onSubmit={event => void add(event)}>
         <h2>Add a provider</h2>
@@ -110,7 +110,7 @@ export default function ProviderSettings({ busy, onUpdate }: { busy: boolean; on
         <label>API base URL<input value={baseUrl} onChange={event => { setBaseUrl(event.target.value); setModels([]); }} placeholder="https://provider.example/v1" required maxLength={250} spellCheck={false} /></label>
         <label>Model ID<input list="available-models" value={model} onChange={event => setModel(event.target.value)} placeholder="Exact model identifier" required maxLength={160} spellCheck={false} /><datalist id="available-models">{models.map(id => <option key={id} value={id} />)}</datalist></label>
         <label>API key {preset === 'ollama' && <span>(optional for local models)</span>}<input type="password" autoComplete="off" value={apiKey} onChange={event => setApiKey(event.target.value)} required={preset !== 'ollama'} maxLength={500} placeholder="Stored only on your local server" /></label>
-        {baseUrl.replace(/\/+$/, '') === presets.openrouter.baseUrl && <label className="provider-checkbox"><input type="checkbox" checked={freeFallback} onChange={event => setFreeFallback(event.target.checked)} /> Try up to two verified free models after recoverable errors</label>}
+        {baseUrl.replace(/\/+$/, '') === presets.openrouter.baseUrl && <label className="provider-checkbox"><input type="checkbox" checked={freeFallback} onChange={event => setFreeFallback(event.target.checked)} /> Switch to up to two verified free models after rate limits or recoverable errors</label>}
         <button className="provider-model-button" type="button" onClick={() => void loadModels()} disabled={saving || busy || !baseUrl || (preset !== 'ollama' && !apiKey)}>Load model IDs</button>
         <button className="provider-submit" type="submit" disabled={saving || busy}>Save and select provider</button>
         <p className="provider-hint">Remote connections use HTTPS. Local Ollama accepts HTTP. Free models can have daily limits; choosing a paid provider may incur charges.</p>

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { eligibleFreeModels, withFreeFallback } from './free-models.mjs';
-import { generateWebsite } from './provider.mjs';
+import { generateDiscoveryQuestions, generateWebsite } from './provider.mjs';
 import { makeWorkspace } from './workflow.mjs';
 
 const env = { AI_BASE_URL: 'https://openrouter.ai/api/v1', AI_MODEL: 'openrouter/free', AI_API_KEY: 'test-key' };
@@ -86,6 +86,42 @@ test('free-only router is attempted when catalog discovery fails', async () => {
     initialTokens: 1500, minimumFallbackTokens: 1200, sleepImpl: async () => {} });
   assert.equal(result.model, 'openrouter/free');
   assert.equal(attempts, 2);
+});
+
+test('temporary model limits and gateway errors rotate through verified free models', async () => {
+  const attempts = [];
+  const fetchImpl = async (url, options) => {
+    if (new URL(url).pathname.endsWith('/models')) {
+      return { ok: true, json: async () => ({ data: [model('free/first:free', 2048), model('paid/never:free', 16000, { prompt: '0', completion: '0.01', request: '0' }), model('free/second:free', 16000)] }) };
+    }
+    attempts.push(JSON.parse(options.body).model);
+    if (attempts.length === 1) return { ok: false, status: 408, json: async () => ({}) };
+    if (attempts.length === 2) return { ok: false, status: 425, json: async () => ({}) };
+    const content = attempts.length === 3 ? body : css;
+    return { ok: true, headers: { get: () => 'application/json' }, text: async () => JSON.stringify({ choices: [{ message: { content }, finish_reason: 'stop' }] }) };
+  };
+  const artifact = await generateWebsite(project(), { env: { ...env, AI_MODEL: 'free/selected:free' }, fetchImpl, sleepImpl: async () => {} });
+  assert.deepEqual(attempts, ['free/selected:free', 'free/second:free', 'free/first:free', 'free/selected:free']);
+  assert.equal(artifact.model, 'free/selected:free');
+});
+
+test('invalid discovery output switches to another free model before it reaches the user', async () => {
+  const attempts = [];
+  const fetchImpl = async (url, options) => {
+    if (new URL(url).pathname.endsWith('/models')) return { ok: true, json: async () => ({ data: [model('free/questions:free', 2048)] }) };
+    attempts.push(JSON.parse(options.body).model);
+    const content = attempts.length === 1 ? '{bad json'
+      : JSON.stringify({ questions: [
+        { key: 'scope', question: 'What belongs in version one?', options: ['Core workflow', 'Core workflow plus reporting'] },
+        { key: 'success', question: 'How will you measure success?', options: ['User testing', 'A target conversion rate'] },
+      ] });
+    return { ok: true, headers: { get: () => 'application/json' }, text: async () => JSON.stringify({ choices: [{ message: { content }, finish_reason: 'stop' }] }) };
+  };
+  const discovery = { mode: 'consultancy', brief: 'Plan a small service website', discovery: { status: 'followup', answers: {} } };
+  const result = await generateDiscoveryQuestions(discovery, 'followup', { env: { ...env, AI_MODEL: 'free/selected:free' }, fetchImpl, sleepImpl: async () => {} });
+  assert.deepEqual(attempts, ['free/selected:free', 'free/questions:free']);
+  assert.equal(result.model, 'free/questions:free');
+  assert.equal(result.questions.length, 2);
 });
 
 test('known account quota errors do not trigger free-model fallback or expose provider text', async () => {
