@@ -11,7 +11,7 @@
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "typecheck": "tsc -b",
-    "test": "node --test server/*.test.mjs"
+    "test": "node --test server/*.test.mjs src/*.test.mjs"
   },
   "dependencies": {
     "dotenv": "^16.4.7",

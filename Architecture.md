@@ -7,11 +7,11 @@ Status: implemented local consultancy workflow and longer-term migration targets
 | Concern | Current module / behavior |
 | --- | --- |
 | UI and orchestration | `src/App.tsx`, `src/workflow.ts`; polls `/api/workspace`, renders tasks, review, saved project selector, and prototype preview |
-| Office | `src/OfficeScene.tsx`; procedural WebGL scene with orbit controls, human figures, operation-driven walking and gestures, and DOM bubbles/roster |
+| Office | `src/OfficeScene.tsx`; procedural WebGL scene with orbit controls, human figures, operation-driven walking and gestures, and DOM bubbles/roster. Nova (only) may render a rigged GLTF character via `src/NovaCharacter.ts` with `src/nova-animation.ts` state→clip mapping, falling back to the procedural figure when `public/models/nova/nova.glb` is missing or unparsable |
 | API | `server/index.mjs`; localhost `127.0.0.1`, JSON endpoints, one global in-memory busy flag, long-lived provider requests |
 | Workflow | `server/workflow.mjs`, `server/consultancy.mjs`; legacy tasks preserved, new projects add saved starter and follow-up discovery answers, optional AI-tailored question wording and answer suggestions, and four approval-gated consultancy assignments |
 | Research | `server/research.mjs`; optional Brave Search URLs and snippets, explicitly labeled as unverified, or a research plan without a search key |
-| Provider | `server/provider.mjs`, `server/free-models.mjs`; OpenAI-compatible chat completions, bounded OpenRouter free fallback |
+| Provider | `server/provider.mjs`, `server/free-models.mjs`; OpenAI-compatible chat completions, bounded OpenRouter free fallback. OpenRouter can also be connected via its official PKCE browser authorization (`server/openrouter-oauth.mjs`): the local server creates a one-time transaction, the browser approves on openrouter.ai, and the callback exchanges the code server-side and stores the returned key through the existing encrypted provider-settings storage. No OAuth client secret exists in this flow; the transaction lives only in server memory with an HttpOnly cookie binding.
 | Settings | `server/provider-settings.mjs`; server-side encrypted credentials in gitignored `data/providers.json`, local key in `data/provider.key` |
 | Persistence | `server/store.mjs`; atomic JSON replacement for `data/projects.json`; imports legacy `data/workspace.json` |
 | Prototype | Two checkpointed stages (HTML body, CSS), then one `index.html` in project JSON; iframe preview, download and saved versions with user revision feedback |
@@ -51,7 +51,7 @@ Do not equate local encryption with user separation: anyone who controls the mac
 1. Confirm scope and design state contract; add migration tests for old projects. Document security threats and keep the API local.
 2. Implement saved discovery Q&A, structured brief and approvals. Separate durable project state from in-memory provider requests.
 3. Add source-backed research, requirements and design artifacts with versions and review; never substitute model prose for retrieved evidence or image files.
-4. Keep the task-driven 3D characters and status bubbles aligned with server operation snapshots. Provide a textual fallback and reduced motion; improve authored assets and visual QA separately.
+4. Keep the task-driven 3D characters and status bubbles aligned with server operation snapshots. Provide a textual fallback and reduced motion; improve authored assets and visual QA separately. Nova's rigged-character prototype is additive: it reuses the same truthful status mapping, keeps the procedural figures for Mira, Atlas, and Echo, and requires any committed model asset to have documented redistribution terms.
 5. Add resumable background jobs and editable website files/versions, safe preview, file download/ZIP, and selective regeneration.
 6. Only if hosting is approved, complete identity, authorization, storage, abuse controls, security headers, privacy requirements, and release gates above.
 

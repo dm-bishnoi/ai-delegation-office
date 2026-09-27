@@ -2,15 +2,20 @@ import { useEffect, useRef, useState } from 'react';
 import * as T from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { agents, type AgentId, type Workspace } from './workflow';
+import { NovaCharacter } from './NovaCharacter';
+import { resolveBubbleLayout, type BubbleAnchor } from './bubble-layout';
 
 export type OfficeOperation = { type: 'website' | 'task' | 'discovery' | 'research'; projectId: string; agent?: AgentId; phase?: 'running' | 'waiting' } | null;
 type Props = { workspace: Workspace; operation: OfficeOperation; selected: AgentId; onSelect: (id: AgentId) => void };
 type Status = 'working' | 'waiting' | 'review' | 'done' | 'failed' | 'ready';
 type View = { status: Status; message: string };
 const ids: AgentId[] = ['lead', 'design', 'build', 'qa'];
+// Desk footprints (from createRoom): a desk at (x,z) spans x±.83, z±.38.
+// Standing clearance keeps characters ~0.15 out from the desk edge; workers at
+// a monitored desk stand on the +Z side facing -Z (toward the screen).
 const positions: Record<AgentId, { home: [number, number]; work: [number, number] }> = {
-  lead: { home: [-3.3, .5], work: [-1.1, .65] }, design: { home: [2.4, -1], work: [2.6, -1.9] },
-  build: { home: [-3.1, 2.2], work: [-3.1, 1.65] }, qa: { home: [3.15, 2.2], work: [1.25, 1.55] },
+  lead: { home: [-3.3, .95], work: [-1.35, 1.2] }, design: { home: [2.35, -1.25], work: [2.6, -1.2] },
+  build: { home: [-3.05, 2.35], work: [-3.05, 2.3] }, qa: { home: [3.15, 2.35], work: [1.35, 1.2] },
 };
 const verbs: Record<AgentId, string> = { lead: 'Interviewing', design: 'Designing', build: 'Building', qa: 'Reviewing' };
 const idle: Record<AgentId, string> = { lead: 'Ready to discuss your idea', design: 'Waiting for approved requirements', build: 'Waiting for approved plans', qa: 'Waiting for a draft' };
@@ -126,7 +131,7 @@ function createRoom() {
 export default function OfficeScene({ workspace, operation, selected, onSelect }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const bubbles = useRef<Record<AgentId, HTMLButtonElement | null>>({ lead: null, design: null, build: null, qa: null });
-  const current = useRef({ workspace, operation, onSelect }); current.current = { workspace, operation, onSelect };
+  const current = useRef({ workspace, operation, onSelect, selectedAgent: selected as AgentId }); current.current = { workspace, operation, onSelect, selectedAgent: selected as AgentId };
   const [unavailable, setUnavailable] = useState(false);
   const views = Object.fromEntries(ids.map(id => [id, agentView(id, workspace, operation)])) as Record<AgentId, View>;
 
@@ -140,6 +145,21 @@ export default function OfficeScene({ workspace, operation, selected, onSelect }
     renderer.outputColorSpace = T.SRGBColorSpace;
     renderer.domElement.setAttribute('aria-hidden', 'true'); element.appendChild(renderer.domElement);
     const { scene, humans } = createRoom();
+    // Nova rigged-character prototype: lazily load the GLB character for Nova only.
+    // On any failure the existing procedural Nova stays visible and selectable.
+    let rig: NovaCharacter | null = null;
+    let disposed = false;
+    NovaCharacter.load().then(character => {
+      if (disposed) { character.dispose(); return; }
+      rig = character;
+      character.root.position.copy(humans.lead.root.position);
+      character.root.rotation.copy(humans.lead.root.rotation);
+      scene.add(character.root);
+      humans.lead.root.visible = false;
+      if (import.meta.env.DEV) console.info(`Nova character loaded: ${character.describe()}`);
+    }).catch(() => {
+      if (!disposed && import.meta.env.DEV) console.warn('Nova GLB could not be loaded; using the procedural figure instead.');
+    });
     const camera = new T.PerspectiveCamera(43, 1, .1, 60);
     camera.position.set(8.3, 8, 11.8); camera.lookAt(0, .85, 0);
     const controls = new OrbitControls(camera, renderer.domElement); controls.target.set(0, .85, 0);
@@ -156,12 +176,15 @@ export default function OfficeScene({ workspace, operation, selected, onSelect }
       const rect = renderer.domElement.getBoundingClientRect();
       cursor.set((event.clientX - rect.left) / rect.width * 2 - 1, -(event.clientY - rect.top) / rect.height * 2 + 1);
       ray.setFromCamera(cursor, camera);
-      const hits = ray.intersectObjects(ids.map(id => humans[id].root), true);
-      for (const hit of hits) { const id = ids.find(agent => humans[agent].root.getObjectById(hit.object.id)); if (id) { current.current.onSelect(id); break; } }
+      const rootFor = (id: AgentId) => id === 'lead' && rig ? rig.raycastRoot : humans[id].root;
+      const hits = ray.intersectObjects(ids.map(rootFor), true);
+      for (const hit of hits) { const id = ids.find(agent => rootFor(agent).getObjectById(hit.object.id)); if (id) { current.current.onSelect(id); break; } }
     }
     function contextLost(event: Event) { event.preventDefault(); setUnavailable(true); }
     renderer.domElement.addEventListener('click', selectAt); renderer.domElement.addEventListener('webglcontextlost', contextLost);
     let frame = 0, previous = 0;
+    const layoutCache = new Map<string, { dx: number; dy: number }>();
+    let lastViewport = { width: 0, height: 0 };
     function animate(time: number) {
       frame = requestAnimationFrame(animate);
       if (document.hidden || time - previous < 32) return;
@@ -170,37 +193,74 @@ export default function OfficeScene({ workspace, operation, selected, onSelect }
       for (const id of ids) {
         const human = humans[id], status = agentView(id, current.current.workspace, current.current.operation).status;
         const target = positions[id][status === 'working' ? 'work' : 'home'];
-        const distance = Math.hypot(human.root.position.x - target[0], human.root.position.z - target[1]);
+        const character = id === 'lead' ? rig : null;
+        const body = character ? character.root : human.root;
+        const distance = Math.hypot(body.position.x - target[0], body.position.z - target[1]);
         const walking = !reduced.matches && distance > .045;
         if (walking) {
           const fraction = Math.min(1, delta * 2.3 / distance);
-          human.root.position.x += (target[0] - human.root.position.x) * fraction;
-          human.root.position.z += (target[1] - human.root.position.z) * fraction;
-          human.root.rotation.y = Math.atan2(target[0] - human.root.position.x, target[1] - human.root.position.z);
+          body.position.x += (target[0] - body.position.x) * fraction;
+          body.position.z += (target[1] - body.position.z) * fraction;
+          body.rotation.y = Math.atan2(target[0] - body.position.x, target[1] - body.position.z);
         } else {
-          human.root.position.x = target[0]; human.root.position.z = target[1];
-          const angle = id === 'design' ? Math.PI : id === 'lead' && status === 'working' ? 1 : -.35;
-          human.root.rotation.y = reduced.matches ? angle : human.root.rotation.y + (angle - human.root.rotation.y) * Math.min(1, delta * 4);
+          body.position.x = target[0]; body.position.z = target[1];
+          // Desk workers face their screens (-Z); table workers face the table;
+          // home stances face the room. Angles = atan2 toward the focal point.
+          const angle = id === 'design' || id === 'build' ? Math.PI : id === 'qa' ? -2.1 : id === 'lead' && status === 'working' ? 2.2 : -.35;
+          body.rotation.y = reduced.matches ? angle : body.rotation.y + (angle - body.rotation.y) * Math.min(1, delta * 4);
         }
-        const phase = time / 180 + ids.indexOf(id);
-        human.legs[0].rotation.x = walking ? Math.sin(phase) * .4 : 0;
-        human.legs[1].rotation.x = walking ? -Math.sin(phase) * .4 : 0;
-        human.arms[0].rotation.x = walking ? -Math.sin(phase) * .3 : status === 'working' && !reduced.matches ? -.13 + Math.sin(phase) * .13 : 0;
-        human.arms[1].rotation.x = walking ? Math.sin(phase) * .3 : status === 'working' && !reduced.matches ? -.13 - Math.sin(phase) * .13 : 0;
-        human.head.rotation.z = status === 'working' && !reduced.matches ? Math.sin(phase * .2) * .026 : 0;
-        human.root.position.y = walking ? Math.abs(Math.sin(phase)) * .035 : 0;
-        const bubble = bubbles.current[id];
-        if (bubble) {
-          projected.set(human.root.position.x, 2.3, human.root.position.z).project(camera);
-          bubble.style.left = `${(projected.x + 1) * element!.clientWidth / 2}px`;
-          bubble.style.top = `${(1 - projected.y) * element!.clientHeight / 2}px`;
-          bubble.style.visibility = Math.abs(projected.x) > 1.1 || Math.abs(projected.y) > 1.1 ? 'hidden' : 'visible';
+        if (character) {
+          character.setState({ status, walking, reducedMotion: reduced.matches });
+          character.update(delta);
+        } else {
+          const phase = time / 180 + ids.indexOf(id);
+          human.legs[0].rotation.x = walking ? Math.sin(phase) * .4 : 0;
+          human.legs[1].rotation.x = walking ? -Math.sin(phase) * .4 : 0;
+          human.arms[0].rotation.x = walking ? -Math.sin(phase) * .3 : status === 'working' && !reduced.matches ? -.13 + Math.sin(phase) * .13 : 0;
+          human.arms[1].rotation.x = walking ? Math.sin(phase) * .3 : status === 'working' && !reduced.matches ? -.13 - Math.sin(phase) * .13 : 0;
+          human.head.rotation.z = status === 'working' && !reduced.matches ? Math.sin(phase * .2) * .026 : 0;
+          human.root.position.y = walking ? Math.abs(Math.sin(phase)) * .035 : 0;
+        }
+      }
+      // Bubble collision avoidance: project all anchors, resolve overlaps in
+      // one deterministic pass, then apply. Kept after the movement loop so a
+      // single DOM write per bubble per frame (offsets are stable frame to
+      // frame; hysteresis prevents flicker).
+      const viewport = { width: element!.clientWidth, height: element!.clientHeight };
+      if (viewport.width && viewport.height) {
+        if (viewport.width !== lastViewport.width || viewport.height !== lastViewport.height) {
+          lastViewport = viewport;
+          layoutCache.clear(); // container resized: recompute from scratch
+        }
+        const anchors: BubbleAnchor[] = [];
+        for (const id of ids) {
+          const bubble = bubbles.current[id];
+          if (!bubble) continue;
+          const human = humans[id];
+          const character = id === 'lead' ? rig : null;
+          if (character) character.bubbleWorldPosition(projected); else projected.set(human.root.position.x, 2.3, human.root.position.z);
+          projected.project(camera);
+          const offScreen = Math.abs(projected.x) > 1.1 || Math.abs(projected.y) > 1.1;
+          const rect = bubble.getBoundingClientRect();
+          anchors.push({
+            id, x: (projected.x + 1) * viewport.width / 2, y: (1 - projected.y) * viewport.height / 2,
+            width: rect.width, height: rect.height, selected: id === current.current.selectedAgent, hidden: offScreen,
+          });
+        }
+        for (const placement of resolveBubbleLayout(anchors, viewport, layoutCache)) {
+          const bubble = bubbles.current[placement.id as AgentId];
+          if (!bubble) continue;
+          bubble.style.left = `${placement.x}px`;
+          bubble.style.top = `${placement.y}px`;
+          const anchor = anchors.find(item => item.id === placement.id);
+          bubble.style.visibility = anchor?.hidden ? 'hidden' : 'visible';
         }
       }
       renderer.render(scene, camera);
     }
     frame = requestAnimationFrame(animate);
     return () => {
+      disposed = true; rig?.dispose();
       cancelAnimationFrame(frame); observer.disconnect(); controls.dispose();
       renderer.domElement.removeEventListener('click', selectAt); renderer.domElement.removeEventListener('webglcontextlost', contextLost);
       scene.traverse(object => { if (object instanceof T.Mesh) { object.geometry.dispose(); const all = Array.isArray(object.material) ? object.material : [object.material]; all.forEach(item => item.dispose()); } });

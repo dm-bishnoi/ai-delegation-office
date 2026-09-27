@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react';
 
-type SavedProvider = { id: string; name: string; baseUrl: string; model: string; hasKey: boolean; freeFallback: boolean };
+type VerifiedModel = { id: string; verifiedAt: string; maxOutputTokens: number; status: string };
+type SavedProvider = { id: string; name: string; baseUrl: string; model: string; hasKey: boolean; freeFallback: boolean; viaOAuth?: boolean; verifiedFreeModels?: VerifiedModel[] };
 type Settings = { activeId: string | null; providers: SavedProvider[] };
 type Preset = 'openrouter' | 'openai' | 'ollama' | 'custom';
 const presets: Record<Preset, { label: string; name: string; baseUrl: string; model: string }> = {
@@ -17,7 +18,7 @@ async function request<T>(path: string, data?: object): Promise<T> {
   return payload as T;
 }
 
-export default function ProviderSettings({ busy, onUpdate }: { busy: boolean; onUpdate: () => Promise<void> }) {
+export default function ProviderSettings({ busy, onUpdate, notice = '' }: { busy: boolean; onUpdate: () => Promise<void>; notice?: string }) {
   const [settings, setSettings] = useState<Settings | null>(null);
   const [preset, setPreset] = useState<Preset>('openrouter');
   const [name, setName] = useState(presets.openrouter.name);
@@ -31,6 +32,12 @@ export default function ProviderSettings({ busy, onUpdate }: { busy: boolean; on
   const [status, setStatus] = useState('');
 
   useEffect(() => { void request<Settings>('/api/providers').then(setSettings).catch(cause => setError(cause.message)); }, []);
+
+  useEffect(() => {
+    if (!notice) return;
+    if (notice === 'error') setError('OpenRouter authorization did not complete. No credentials were saved; you can try again or enter an API key manually.');
+    if (notice === 'connected') setStatus('OpenRouter connected via authorization. Run Check API key to confirm, or choose another model.');
+  }, [notice]);
 
   function choose(value: Preset) {
     setPreset(value);
@@ -71,6 +78,18 @@ export default function ProviderSettings({ busy, onUpdate }: { busy: boolean; on
     finally { setSaving(false); }
   }
 
+  async function refreshFreeModels() {
+    setSaving(true); setError(''); setStatus('');
+    try {
+      const result = await request<{ verifiedFreeModels: VerifiedModel[]; note: string; provider: { model: string | null } }>('/api/providers/free-models', {});
+      setSettings(previous => previous ? { ...previous, providers: previous.providers.map(item =>
+        item.id === previous.activeId ? { ...item, verifiedFreeModels: result.verifiedFreeModels, model: result.provider.model || item.model } : item) } : previous);
+      setStatus(`${result.note} Active model: ${result.provider.model}.`);
+      await onUpdate();
+    } catch (cause) { setError(cause instanceof Error ? cause.message : 'Model discovery failed.'); }
+    finally { setSaving(false); }
+  }
+
   async function loadModels() {
     setSaving(true); setError(''); setStatus('');
     try {
@@ -92,7 +111,18 @@ export default function ProviderSettings({ busy, onUpdate }: { busy: boolean; on
         <h2>Connected providers</h2>
         <p>Keys stay on the local Node server. An existing <code>.env</code> setup remains available.</p>
         {settings?.providers.map(item => <div className="provider-row" key={item.id}>
-          <div><strong>{item.name}</strong><small>{item.model} · {item.baseUrl}</small><span>{settings.activeId === item.id ? 'ACTIVE' : 'INACTIVE'}{item.baseUrl === presets.openrouter.baseUrl ? ` · FREE FALLBACK ${item.freeFallback ? 'ON' : 'OFF'}` : ''}</span></div>
+          <div><strong>{item.name}</strong><small>{item.model} · {item.baseUrl}{item.viaOAuth ? ' · connected via OpenRouter authorization' : ''}</small><span>{settings.activeId === item.id ? 'ACTIVE' : 'INACTIVE'}{item.baseUrl === presets.openrouter.baseUrl ? ` · FREE FALLBACK ${item.freeFallback ? 'ON' : 'OFF'}` : ''}</span></div>
+          {settings.activeId === item.id && item.verifiedFreeModels?.length ? <div className="verified-models">
+            <span className="verified-models-label">Verified free models</span>
+            <ul>{item.verifiedFreeModels.map(model => <li key={model.id} className={model.id === item.model ? 'active-model' : ''}>
+              <button type="button" disabled={busy || saving || model.id === item.model} onClick={() => void change(async () => {
+                const updated = await request<Settings>('/api/providers/models/select', { id: item.id, model: model.id });
+                setSettings(updated); await onUpdate(); return updated;
+              }, `Active model set to ${model.id}.`)}>{model.id === item.model ? '▶ ' : '✓ '}{model.id}</button>
+            </li>)}</ul>
+            <small>Checked {new Date(item.verifiedFreeModels[0].verifiedAt).toLocaleTimeString()}</small>
+            <button type="button" className="provider-model-button" disabled={busy || saving} onClick={() => void refreshFreeModels()}>Refresh models</button>
+          </div> : null}
           <div className="provider-actions">
             {settings.activeId !== item.id && <button disabled={busy || saving} onClick={() => void change(() => request<Settings>('/api/providers/select', { id: item.id }), 'Provider selected.')}>Use</button>}
             {settings.activeId === item.id && <button disabled={busy || saving} onClick={() => void test(item.id)}>{item.baseUrl === presets.openrouter.baseUrl ? 'Check API key' : 'Test connection'}</button>}
@@ -105,6 +135,10 @@ export default function ProviderSettings({ busy, onUpdate }: { busy: boolean; on
       </div>
       <form className="provider-panel provider-form" onSubmit={event => void add(event)}>
         <h2>Add a provider</h2>
+        {preset === 'openrouter' && <div className="provider-oauth">
+          <a className="provider-oauth-button" href="/api/providers/openrouter/connect" onClick={event => { if (busy || saving) event.preventDefault(); }}>Connect OpenRouter</a>
+          <p className="provider-hint">Opens OpenRouter in your browser to approve access; the key is exchanged and stored on your local server only. This replaces any saved OpenRouter key connection. Or enter an API key manually below.</p>
+        </div>}
         <label>Provider<select value={preset} onChange={event => choose(event.target.value as Preset)}>{Object.entries(presets).map(([key, item]) => <option key={key} value={key}>{item.label}</option>)}</select></label>
         <label>Connection name<input value={name} onChange={event => setName(event.target.value)} required maxLength={60} /></label>
         <label>API base URL<input value={baseUrl} onChange={event => { setBaseUrl(event.target.value); setModels([]); }} placeholder="https://provider.example/v1" required maxLength={250} spellCheck={false} /></label>

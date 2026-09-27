@@ -1,6 +1,28 @@
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
 const maxFallbacks = 2;
 
+// Transient per-model cooldowns after recoverable failures (safe metadata only:
+// model id, failure class, cooldownUntil). Never persisted; never blocks the
+// user's explicitly selected first model for an operation.
+const cooldownDurationsMs = { rate_limit: 10 * 60 * 1000, quota_exhausted: 10 * 60 * 1000, default: 2 * 60 * 1000 };
+const modelCooldowns = new Map();
+
+export function setModelCooldown(modelId, reason, now = Date.now()) {
+  if (typeof modelId !== 'string' || !modelId) return;
+  if (modelCooldowns.size > 200) modelCooldowns.clear(); // bounded safety valve
+  const duration = cooldownDurationsMs[reason] ?? cooldownDurationsMs.default;
+  modelCooldowns.set(modelId, { reason, cooldownUntil: now + duration });
+}
+
+export function modelCoolingDown(modelId, now = Date.now()) {
+  const entry = modelCooldowns.get(modelId);
+  if (!entry) return false;
+  if (now >= entry.cooldownUntil) { modelCooldowns.delete(modelId); return false; }
+  return true;
+}
+
+export function clearModelCooldowns() { modelCooldowns.clear(); }
+
 const reasonLabels = {
   timeout: 'timeout',
   transport: 'transport failure',
@@ -72,7 +94,7 @@ export function eligibleFreeModels(models, minOutputTokens, excluded = []) {
   return sorted.filter((model, index) => sorted.findIndex(item => item.id === model.id) === index).map(model => model.id);
 }
 
-export async function freeFallbackModels({ env, fetchImpl, minOutputTokens, excluded = [] }) {
+export async function eligibleCatalogModels({ env, fetchImpl, minOutputTokens, excluded = [] }) {
   const response = await fetchImpl('https://openrouter.ai/api/v1/models', {
     headers: { Authorization: `Bearer ${env.AI_API_KEY.trim()}`, Accept: 'application/json' },
     signal: AbortSignal.timeout(10000),
@@ -83,10 +105,26 @@ export async function freeFallbackModels({ env, fetchImpl, minOutputTokens, excl
   catch { throw new Error('OpenRouter free-model catalog returned invalid JSON.'); }
   if (!Array.isArray(payload?.data)) throw new Error('OpenRouter free-model catalog returned no model list.');
   const catalog = new Map(payload.data.filter(model => typeof model?.id === 'string').map(model => [model.id, model]));
-  const models = eligibleFreeModels(payload.data, minOutputTokens, excluded).slice(0, maxFallbacks)
+  return eligibleFreeModels(payload.data, minOutputTokens, excluded).slice(0, maxFallbacks)
     .map(id => ({ id, maxTokens: Number(catalog.get(id).top_provider.max_completion_tokens) }));
-  while (models.length < maxFallbacks) models.push({ id: 'openrouter/free', maxTokens: minOutputTokens });
+}
+
+export async function freeFallbackModels(options) {
+  const models = await eligibleCatalogModels(options);
+  while (models.length < maxFallbacks) models.push({ id: 'openrouter/free', maxTokens: options.minOutputTokens });
   return models;
+}
+
+/** Reads the provider's server-side verified free-model pool from the active env. */
+function verifiedPoolCandidates(env, excluded) {
+  try {
+    const parsed = JSON.parse(env.AI_VERIFIED_FREE_MODELS || '[]');
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter(item => item && typeof item.id === 'string' && item.id.endsWith(':free') && !excluded.includes(item.id)
+        && Number.isFinite(Number(item.maxOutputTokens)) && Number(item.maxOutputTokens) > 0)
+      .map(item => ({ id: item.id, maxTokens: Number(item.maxOutputTokens) }));
+  } catch { return []; }
 }
 
 export async function withFreeFallback(run, { env, fetchImpl, initialTokens, fallbackTokens = initialTokens,
@@ -101,7 +139,10 @@ export async function withFreeFallback(run, { env, fetchImpl, initialTokens, fal
     const total = maxFallbacks + 1;
     if (attempt > 1) {
       const delayMs = attempt === 2 ? 3000 : 6000;
-      onAttempt({ model: fallback.id, attempt, total, phase: 'waiting', delayMs });
+      const previous = history[history.length - 1];
+      const switchReason = previous && previous.reason !== 'completed' ? reasonLabels[previous.reason] || 'generation failed' : null;
+      onAttempt({ model: fallback.id, attempt, total, phase: 'waiting', delayMs,
+        previousModel: previous?.requestedModel ?? null, switchReason });
       await sleepImpl(delayMs);
     }
     const tokenLimit = Math.min(fallbackTokens, fallback.maxTokens);
@@ -137,19 +178,29 @@ export async function withFreeFallback(run, { env, fetchImpl, initialTokens, fal
         reason,
       });
       if (!error.retryable) throw attachHistory(error, history);
+      setModelCooldown(fallback.id, reason);
       if (attempt === 1) {
         if (!isOpenRouter(env.AI_BASE_URL?.trim()) || env.AI_FREE_FALLBACK?.trim().toLowerCase() === 'false') throw attachHistory(error, history);
-        let candidates;
-        try { candidates = await freeFallbackModels({ env, fetchImpl, minOutputTokens: minimumFallbackTokens, excluded: [firstModel] }); }
-        catch { candidates = Array.from({ length: maxFallbacks }, () => ({ id: 'openrouter/free', maxTokens: minimumFallbackTokens })); }
-        const seen = new Set();
-        candidates = candidates.filter(item => {
-          if (item.id === firstModel && item.id !== 'openrouter/free') return false;
-          if (item.id === 'openrouter/free') return true;
-          if (seen.has(item.id)) return false;
-          seen.add(item.id);
-          return true;
-        });
+        // Failover order: verified healthy pool first, then catalog-eligible
+        // explicit free models, with the generic openrouter/free router added
+        // only as final last-resort padding. Cooldowns skip recently failed
+        // models; the user-selected first model is always attempted first.
+        const seen = new Set([firstModel]);
+        let candidates = verifiedPoolCandidates(env, []).filter(item => item.id === 'openrouter/free' || !modelCoolingDown(item.id));
+        candidates.forEach(item => seen.add(item.id));
+        if (candidates.length < maxFallbacks) {
+          try {
+            const catalogModels = await eligibleCatalogModels({ env, fetchImpl, minOutputTokens: minimumFallbackTokens, excluded: [...seen] });
+            for (const item of catalogModels) {
+              if (candidates.length >= maxFallbacks) break;
+              if (seen.has(item.id) || (item.id !== 'openrouter/free' && modelCoolingDown(item.id))) continue;
+              seen.add(item.id);
+              candidates.push(item);
+            }
+          } catch { /* Catalog unavailable: fall back to the pool and/or router. */ }
+        }
+        while (candidates.length < maxFallbacks) candidates.push({ id: 'openrouter/free', maxTokens: minimumFallbackTokens });
+        candidates = candidates.filter((item, index) => candidates.findIndex(other => other.id === item.id) === index);
         if (!candidates.length) throw attachHistory(exhaustionError(history), history);
         models = [{ id: firstModel, maxTokens: initialTokens }, ...candidates];
         continue;

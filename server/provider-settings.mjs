@@ -73,8 +73,9 @@ export function publicProviderSettings(settings, env = process.env) {
     providers: [
       ...(fallback.configured ? [{ id: 'env', name: 'Environment (.env)', baseUrl: fallbackUrl, model: fallback.model, hasKey: true,
         freeFallback: isOpenRouter(env.AI_BASE_URL) && env.AI_FREE_FALLBACK?.trim().toLowerCase() !== 'false' }] : []),
-      ...settings.providers.map(({ id, name, baseUrl, model, credential, freeFallback }) => ({ id, name, baseUrl, model,
-        hasKey: Boolean(credential), freeFallback: isOpenRouter(baseUrl) && freeFallback !== false })),
+      ...settings.providers.map(({ id, name, baseUrl, model, credential, freeFallback, viaOAuth, verifiedFreeModels }) => ({ id, name, baseUrl, model,
+        hasKey: Boolean(credential), freeFallback: isOpenRouter(baseUrl) && freeFallback !== false, viaOAuth: viaOAuth === true,
+        verifiedFreeModels: Array.isArray(verifiedFreeModels) ? verifiedFreeModels : [] })),
     ],
   };
 }
@@ -90,7 +91,15 @@ export async function activeProviderEnv(settings, env = process.env, secretPath 
   return { ...env, AI_BASE_URL: active.baseUrl, AI_MODEL: active.model,
     AI_API_KEY: active.credential ? await decrypt(active.credential, secretPath) : 'local-no-key',
     AI_LOCAL_NO_KEY: active.credential ? 'false' : 'true',
-    AI_FREE_FALLBACK: isOpenRouter(active.baseUrl) && active.freeFallback !== false ? 'true' : 'false' };
+    AI_FREE_FALLBACK: isOpenRouter(active.baseUrl) && active.freeFallback !== false ? 'true' : 'false',
+    AI_VERIFIED_FREE_MODELS: JSON.stringify(Array.isArray(active.verifiedFreeModels) ? active.verifiedFreeModels : []) };
+}
+
+/** Decrypts the active provider's credential for a bounded server-side operation (never returned to clients). */
+export async function providerCredential(settings, secretPath = keyFile) {
+  const active = settings.providers.find(item => item.id === settings.activeId);
+  if (!active?.credential) return null;
+  return decrypt(active.credential, secretPath);
 }
 
 export async function saveProvider(settings, input, path = settingsFile, secretPath = keyFile) {
@@ -107,6 +116,40 @@ export async function saveProvider(settings, input, path = settingsFile, secretP
     model: model.trim(), credential: apiKey.trim() ? await encrypt(apiKey.trim(), secretPath) : '',
     freeFallback: isOpenRouter(baseUrl.trim()) && freeFallback !== false };
   const updated = { activeId: provider.id, providers: [...settings.providers, provider] };
+  await saveProviderSettings(updated, path);
+  return updated;
+}
+
+export async function saveOAuthProvider(settings, input, path = settingsFile, secretPath = keyFile) {
+  const { baseUrl, model, apiKey } = input || {};
+  const url = providerEndpoint(baseUrl);
+  if (url.username || url.password || url.search || url.hash || !url.pathname.endsWith('/chat/completions')) throw new Error('API URL must be a clean OpenAI-compatible API prefix.');
+  if (typeof model !== 'string' || !model.trim() || model.length > 160) throw new Error('Choose a model for the OpenRouter connection.');
+  if (typeof apiKey !== 'string' || !apiKey.trim() || apiKey.length > 500) throw new Error('OpenRouter did not return a usable key.');
+  const openRouterBase = baseUrl.trim().replace(/\/+$/, '');
+  // Replacement policy: OpenRouter base URL identifies the connection. With
+  // exactly one existing OpenRouter connection, update that same record (keep
+  // its id, name, and free-fallback preference) instead of duplicating it.
+  // With several, replace the currently active one; if none is active, add.
+  const existing = settings.providers.filter(item => isOpenRouter(item.baseUrl));
+  const target = existing.length === 1 ? existing[0]
+    : existing.length > 1 ? existing.find(item => item.id === settings.activeId) : undefined;
+  let providers;
+  let activeId;
+  if (target) {
+    const credential = await encrypt(apiKey.trim(), secretPath);
+    providers = settings.providers.map(item => item.id === target.id
+      ? { ...item, credential, viaOAuth: true, model: model.trim() }
+      : item);
+    activeId = target.id;
+  } else {
+    const provider = { id: randomUUID(), name: 'OpenRouter', baseUrl: openRouterBase,
+      model: model.trim(), credential: await encrypt(apiKey.trim(), secretPath),
+      freeFallback: isOpenRouter(openRouterBase), viaOAuth: true };
+    providers = [...settings.providers, provider];
+    activeId = provider.id;
+  }
+  const updated = { activeId, providers };
   await saveProviderSettings(updated, path);
   return updated;
 }

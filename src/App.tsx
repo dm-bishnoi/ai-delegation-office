@@ -4,7 +4,7 @@ import { agents, type AgentId, type ProjectSummary, type Task, type TaskStatus, 
 const OfficeScene = lazy(() => import('./OfficeScene'));
 
 type Provider = { configured: boolean; model: string | null; name?: string };
-type Operation = { type: 'website' | 'task' | 'discovery' | 'research'; projectId: string; agent?: AgentId; model?: string; attempt?: number; total?: number; phase?: 'running' | 'waiting'; delayMs?: number; readyAt?: number | null; deadlineAt?: number | null; stage?: string; stageNumber?: number; stageTotal?: number } | null;
+type Operation = { type: 'website' | 'task' | 'discovery' | 'research'; projectId: string; agent?: AgentId; model?: string; attempt?: number; total?: number; phase?: 'running' | 'waiting'; delayMs?: number; readyAt?: number | null; deadlineAt?: number | null; stage?: string; stageNumber?: number; stageTotal?: number; previousModel?: string | null; switchReason?: string | null } | null;
 type Snapshot = { workspace: Workspace | null; projects: ProjectSummary[]; provider: Provider; researchSearchConfigured: boolean; busy: boolean; operation: Operation };
 const empty: Workspace = { brief: '', tasks: [], activity: [], running: false, nextId: 1 };
 const columns: { status: TaskStatus; label: string }[] = [
@@ -69,7 +69,7 @@ export default function App() {
   const [websiteFeedback, setWebsiteFeedback] = useState('');
   const [feedback, setFeedback] = useState<Record<number, string>>({});
   const [selected, setSelected] = useState<AgentId>('lead');
-  const [view, setView] = useState<'board' | 'activity' | 'providers'>('board');
+  const [view, setView] = useState<'board' | 'activity' | 'providers'>(() => new URLSearchParams(window.location.search).get('view') === 'providers' ? 'providers' : 'board');
   const [showPreview, setShowPreview] = useState(false);
   const current = workspace ?? empty;
   useEffect(() => {
@@ -284,13 +284,13 @@ export default function App() {
       <main className="main-content">
         <header className="topbar"><span className="breadcrumb">Workspace <span>/</span> {view === 'board' ? 'Overview' : view === 'activity' ? 'Activity' : 'AI connections'}</span><div className="top-right"><label className="sr-only" htmlFor="mobile-project">Select project</label><select id="mobile-project" className="mobile-project-select" value={workspace?.id || ''} onChange={event => void selectProject(event.target.value)} disabled={busy || !projects.length}><option value="" disabled>Projects</option>{projects.map(project => <option key={project.id} value={project.id}>{project.brief}</option>)}</select><span className="top-live"><span className="pulse" /> LOCAL WORKSPACE</span><span className="top-avatar">DB</span></div></header>
         <div className="content-inner">
-          {view === 'providers' ? <ProviderSettings busy={busy} onUpdate={async () => {
+          {view === 'providers' ? <ProviderSettings busy={busy} notice={new URLSearchParams(window.location.search).get('openrouter') || ''} onUpdate={async () => {
             const snapshot = await api<Snapshot>('/api/workspace');
             setProvider(snapshot.provider);
           }} /> : <>
           <div className="heading-row"><div><p className="eyebrow">YOUR COMMAND CENTER <span className="eyebrow-rule" /></p><h1>Where ideas <em>take shape.</em></h1><p className="intro">Clarify your idea, review the evidence and approve each saved deliverable.</p></div><span className="project-number">PROJECT / LOCAL <span>↗</span></span></div>
           {(error || websiteFailure) && <div className="notice error" role="alert"><span>{error || workspace?.websiteError}</span>{websiteFailure && <button type="button" className="notice-retry" onClick={() => void buildWebsite()} disabled={!provider.configured}>Retry website{workspace?.websiteDraft?.body ? ' from saved page' : ''}</button>}</div>}
-          {operation?.phase === 'waiting' && <div className="notice" role="status">Switching to {operation.model} in {remainingSeconds}s · attempt {operation.attempt}/{operation.total}{operation.stageNumber ? ` · website stage ${operation.stageNumber}/${operation.stageTotal}` : operation.type === 'discovery' ? ' · preparing questions' : ''}. Saved progress stays with this project.</div>}
+          {operation?.phase === 'waiting' && <div className="notice" role="status">{operation.switchReason ? `${operation.previousModel ? `${operation.previousModel} ${operation.switchReason}` : 'Previous model ' + operation.switchReason} · switching to ${operation.model}` : `Switching to ${operation.model}`} in {remainingSeconds}s · attempt {operation.attempt}/{operation.total}{operation.stageNumber ? ` · website stage ${operation.stageNumber}/${operation.stageTotal}` : operation.type === 'discovery' ? ' · preparing questions' : ''}. Saved progress stays with this project.</div>}
           {operation?.phase === 'running' && operation.projectId === workspace?.id && <div className="notice" role="status">Using {operation.model} · attempt {operation.attempt}/{operation.total}{operation.stageNumber ? ` · website stage ${operation.stageNumber}/${operation.stageTotal}` : operation.type === 'discovery' ? ' · preparing questions' : ''} · timeout in {remainingSeconds}s. Your saved answers are safe.</div>}
           {!provider.configured && !loading && <div className="notice" role="status">Open <strong>AI connections</strong> to connect a model for written deliverables. Discovery and an offline research plan can be saved now.</div>}
 

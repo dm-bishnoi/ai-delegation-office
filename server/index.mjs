@@ -10,6 +10,27 @@ import { activeProviderEnv, activeProviderInfo, loadProviderSettings, publicProv
 import { loadStore, projectSummaries, saveStore } from './store.mjs';
 import { answerDiscovery, completeConsultancyTask, decideBrief, makeConsultancyProject } from './consultancy.mjs';
 import { collectResearch, researchPlan } from './research.mjs';
+import { consumeTransaction, createTransaction, exchangeCode, OAuthFlowError, TRANSACTION_COOKIE } from './openrouter-oauth.mjs';
+import { saveOAuthProvider, providerCredential } from './provider-settings.mjs';
+import { refreshVerifiedFreeModels } from './free-model-pool.mjs';
+
+const openRouterRedirectUri = process.env.OPENROUTER_REDIRECT_URI?.trim()
+  || `http://127.0.0.1:${Number(process.env.API_PORT || 3001)}/api/providers/openrouter/callback`;
+const openRouterTransactions = new Map(); // cookie value -> { verifier, expiresAt }; server-side only
+
+function serializeCookie({ name, value, httpOnly, maxAgeSeconds }) {
+  return `${name}=${value}; Path=/; Max-Age=${maxAgeSeconds}; HttpOnly; SameSite=Lax`;
+}
+
+function readCookie(req, name) {
+  const header = req.headers.cookie;
+  if (!header) return null;
+  for (const part of header.split(';')) {
+    const [key, ...rest] = part.trim().split('=');
+    if (key === name) return rest.join('=');
+  }
+  return null;
+}
 
 const port = Number(process.env.API_PORT || 3001);
 if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('API_PORT must be a valid port.');
@@ -71,8 +92,55 @@ async function serveStatic(pathname, res) {
 
 const server = createServer(async (req, res) => {
   try {
-    const { pathname } = new URL(req.url, 'http://localhost');
+    const { pathname, searchParams } = new URL(req.url, 'http://localhost');
     if (!pathname.startsWith('/api/')) return await serveStatic(pathname, res);
+
+    if (req.method === 'GET' && pathname === '/api/providers/openrouter/connect') {
+      const { transaction, authorizationUrl, cookie } = createTransaction();
+      openRouterTransactions.set(transaction.cookie, { verifier: transaction.verifier, expiresAt: transaction.expiresAt });
+      res.writeHead(302, {
+        Location: authorizationUrl.replace('__CALLBACK__', openRouterRedirectUri),
+        'Set-Cookie': serializeCookie(cookie),
+        'Cache-Control': 'no-store',
+      });
+      return res.end();
+    }
+
+    if (req.method === 'GET' && pathname === '/api/providers/openrouter/callback') {
+      const failure = reason => {
+        res.writeHead(302, { Location: '/?view=providers&openrouter=error', 'Set-Cookie': `${TRANSACTION_COOKIE}=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax`, 'Cache-Control': 'no-store' });
+        console.warn(`OpenRouter authorization failed: ${reason}`);
+        return res.end();
+      };
+      try {
+        const transaction = consumeTransaction(openRouterTransactions, readCookie(req, TRANSACTION_COOKIE));
+        const key = await exchangeCode(searchParams.get('code'), transaction.verifier);
+        // Non-generation credential check via the existing OpenRouter key endpoint.
+        const check = await fetch('https://openrouter.ai/api/v1/key', {
+          headers: { Authorization: `Bearer ${key}`, Accept: 'application/json' },
+          signal: AbortSignal.timeout(10000), redirect: 'error',
+        });
+        if (!check.ok) throw new OAuthFlowError('OpenRouter key check failed.');
+        await saveOAuthProvider(providerSettings, { baseUrl: 'https://openrouter.ai/api/v1', model: 'openrouter/free', apiKey: key });
+        providerSettings = await loadProviderSettings();
+        // Discover and verify usable free models now that the key is stored.
+        try {
+          const credential = await providerCredential(providerSettings);
+          const { pool } = await refreshVerifiedFreeModels({ apiKey: credential });
+          if (pool.length) {
+            providerSettings = { ...providerSettings, providers: providerSettings.providers.map(item => item.id === providerSettings.activeId ? { ...item, verifiedFreeModels: pool, model: pool[0].id } : item) };
+            await saveProviderSettings(providerSettings);
+            providerSettings = await loadProviderSettings();
+          }
+        } catch (cause) { console.warn(`OpenRouter model discovery skipped: ${cause instanceof Error ? cause.message : 'unavailable'}`); }
+        console.warn('OpenRouter authorization completed.');
+        res.writeHead(302, { Location: '/?view=providers&openrouter=connected', 'Set-Cookie': `${TRANSACTION_COOKIE}=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax`, 'Cache-Control': 'no-store' });
+        return res.end();
+      } catch (cause) {
+        const reason = cause instanceof OAuthFlowError ? cause.message : 'Unexpected error';
+        return failure(reason);
+        }
+    }
     if (req.method === 'GET' && pathname === '/api/workspace') return json(res, 200, snapshot());
     if (req.method === 'GET' && pathname === '/api/providers') return json(res, 200, publicProviderSettings(providerSettings));
     if (req.method !== 'POST') return json(res, 405, { error: 'Method not allowed.' });
@@ -86,6 +154,18 @@ const server = createServer(async (req, res) => {
     if (busy) throw new ClientError(409, 'An AI task is still running.');
     busy = true;
     try {
+      if (pathname === '/api/providers/free-models') {
+        const credential = await providerCredential(providerSettings);
+        if (!credential) throw new ClientError(400, 'Connect an OpenRouter provider with a key first.');
+        try {
+          const { pool, note } = await refreshVerifiedFreeModels({ apiKey: credential });
+          providerSettings = { ...providerSettings, providers: providerSettings.providers.map(item => item.id === providerSettings.activeId
+            ? { ...item, verifiedFreeModels: pool, model: pool.length ? pool[0].id : item.model } : item) };
+          await saveProviderSettings(providerSettings);
+          providerSettings = await loadProviderSettings();
+          return json(res, 200, { verifiedFreeModels: pool, note, provider: activeProviderInfo(providerSettings) });
+        } catch (cause) { throw new ClientError(502, cause instanceof Error ? cause.message : 'Model discovery failed.'); }
+      }
       if (pathname === '/api/providers/models') {
         try { return json(res, 200, { models: await listModels({ baseUrl: body?.baseUrl, apiKey: body?.apiKey }) }); }
         catch (cause) { throw new ClientError(400, cause instanceof Error ? cause.message : 'Could not load models.'); }
@@ -102,6 +182,14 @@ const server = createServer(async (req, res) => {
         try { providerSettings = selectProvider(providerSettings, body?.id); }
         catch (cause) { throw new ClientError(404, cause.message); }
         await saveProviderSettings(providerSettings);
+        return json(res, 200, publicProviderSettings(providerSettings));
+      }
+      if (pathname === '/api/providers/models/select') {
+        const provider = providerSettings.providers.find(item => item.id === body?.id);
+        if (!provider || !Array.isArray(provider.verifiedFreeModels) || !provider.verifiedFreeModels.some(model => model?.id === body?.model)) throw new ClientError(400, 'Choose a verified model from the list.');
+        providerSettings = { ...providerSettings, providers: providerSettings.providers.map(item => item.id === body.id ? { ...item, model: body.model } : item) };
+        await saveProviderSettings(providerSettings);
+        providerSettings = await loadProviderSettings();
         return json(res, 200, publicProviderSettings(providerSettings));
       }
       if (pathname === '/api/providers/fallback') {
