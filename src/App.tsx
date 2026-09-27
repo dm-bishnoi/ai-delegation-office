@@ -69,6 +69,10 @@ export default function App() {
   const [websiteFeedback, setWebsiteFeedback] = useState('');
   const [feedback, setFeedback] = useState<Record<number, string>>({});
   const [selected, setSelected] = useState<AgentId>('lead');
+  type Intent = { kind: 'create' | 'update' | 'ambiguous'; prompt: string; reason: string; projectId?: string; projectTitle?: string };
+  const [intent, setIntent] = useState<Intent | null>(null);
+  const [routing, setRouting] = useState(false);
+  const [activityScope, setActivityScope] = useState<'current' | 'all'>('current');
   const [view, setView] = useState<'board' | 'activity' | 'providers'>(() => new URLSearchParams(window.location.search).get('view') === 'providers' ? 'providers' : 'board');
   const [showPreview, setShowPreview] = useState(false);
   const current = workspace ?? empty;
@@ -213,9 +217,50 @@ export default function App() {
     event.preventDefault();
     if (!brief.trim() || busy) return;
     setAuto(false);
-    if (await mutate('/api/projects', { brief })) {
-      setBrief(''); setAnswers({}); setFeedback({}); setSelected('lead'); setShowPreview(false);
+    setError('');
+    setRouting(true);
+    try {
+      const { routing } = await api<{ routing: { intent: 'new_project' | 'update_project' | 'ambiguous'; targetProjectId: string | null; reason: string } }>('/api/prompts/route', { prompt: brief });
+      if (routing.intent === 'new_project') {
+        setIntent({ kind: 'create', prompt: brief, reason: routing.reason });
+      } else if (routing.intent === 'update_project' && routing.targetProjectId) {
+        const target = projects.find(project => project.id === routing.targetProjectId);
+        setIntent({ kind: 'update', prompt: brief, projectId: routing.targetProjectId, projectTitle: target?.brief.slice(0, 70) || 'the selected project', reason: routing.reason });
+      } else {
+        setIntent({ kind: 'ambiguous', prompt: brief, reason: routing.reason });
+      }
+    } catch {
+      // Routing is unavailable (older API process, network trouble, bad response):
+      // never mutate anything and never surface a misleading route error. Keep
+      // the prompt pending and let the user choose explicitly.
+      setIntent({ kind: 'ambiguous', prompt: brief, reason: 'Automatic prompt routing is unavailable right now. Choose how to continue — nothing has been saved or changed.' });
+    } finally { setRouting(false); }
+  }
+
+  async function confirmIntent() {
+    if (!intent || busy) return;
+    if (intent.kind === 'create') {
+      // Create first: POST /api/projects makes the new project and returns it as
+      // the active workspace in one snapshot. No existing project id is used or
+      // required; on failure mutate() shows a truthful error and the previous
+      // project remains selected and rendered.
+      if (await mutate('/api/projects', { brief: intent.prompt })) {
+        setBrief(''); setIntent(null); setAnswers({}); setFeedback({}); setSelected('lead'); setShowPreview(false);
+      }
+      return;
     }
+    if (intent.kind === 'update') {
+      if (await mutate('/api/projects/route-change', { projectId: intent.projectId, prompt: intent.prompt })) {
+        setBrief('');
+        const projectId = intent.projectId;
+        setIntent(null);
+        if (workspace?.id !== projectId) await mutate(`/api/projects/${projectId}/select`, {});
+      }
+    }
+  }
+
+  async function applyChangeRequest(projectId: string, requestId: string) {
+    if (await mutate(`/api/projects/${projectId}/change-requests/${requestId}/apply`, {})) setIntent(null);
   }
 
   async function decision(task: Task, value: 'approve' | 'revise') {
@@ -252,6 +297,11 @@ export default function App() {
   const activeQuestions = tailoredQuestions?.length ? tailoredQuestions : (discoveryStage === 'followup' ? followUps : questions).map(item => ({ key: item.key, question: item.label, options: [] }));
   const stageHasAnswers = (discoveryStage === 'followup' ? followUps : questions).some(item => Boolean(workspace?.discovery?.answers[item.key]?.trim() || answers[item.key]?.trim()));
   const resumeTarget = !discoveryReady ? 'discovery-title' : allDone ? 'deliverable-title' : 'process-title';
+  const pendingChangeRequest = current.changeRequests?.find(item => item.status === 'awaiting_approval');
+  const allActivity = activityScope === 'all'
+    ? projects.flatMap(project => (project.recentActivity || []).map((entry, index) => ({ ...entry, key: `${project.id}-${entry.time}-${index}`, projectId: project.id, projectTitle: project.brief })))
+      .sort((a, b) => b.time.localeCompare(a.time)).slice(0, 60)
+    : null;
   const resumeLabel = !discoveryReady ? discoveryStage === 'review' ? 'Review clarified brief' : 'Continue discovery' : current.tasks.some(task => task.status === 'failed') ? 'Retry unfinished task' : current.tasks.some(task => task.status === 'review') ? 'Review saved draft' : allDone ? workspace?.artifact ? 'Open saved website' : workspace?.websiteDraft?.body ? 'Continue saved website' : workspace?.websiteError ? 'Retry website' : 'Review saved deliverables' : 'Continue next task';
   function resumeProject() {
     setView('board');
@@ -300,7 +350,48 @@ export default function App() {
           </div>
 
           {workspace && <section className="project-resume" aria-label="Saved project checkpoint"><div><span className="section-kicker">SAVED PROJECT · {done}/{current.tasks.length} TASKS COMPLETE</span><strong>{current.brief}</strong><small>{workspace.artifact ? 'Website file saved with this project' : current.websiteDraft ? 'Website draft checkpoint saved' : !discoveryReady ? 'Your discovery answers are saved' : 'Completed stages and drafts are saved'}</small></div><button type="button" onClick={resumeProject} disabled={busy}>{resumeLabel} <Icon name="arrow" /></button></section>}
-          <section className="brief-card"><div className="brief-heading"><span className="brief-asterisk">✳</span><div><h2>Start with a brief</h2><p>Describe what you want your team to explore.</p></div></div><form onSubmit={submit} className="brief-form"><label className="sr-only" htmlFor="brief">Project brief</label><input id="brief" value={brief} onChange={event => setBrief(event.target.value)} placeholder="e.g. Plan a launch campaign for a new product..." maxLength={500} /><button type="submit" disabled={!brief.trim() || busy}>Start project <Icon name="arrow" /></button></form><div className="brief-note"><strong>Current brief:</strong> {current.brief || 'No project yet.'} <span>· A new brief creates another saved project.</span></div></section>
+          <section className="brief-card"><div className="brief-heading"><span className="brief-asterisk">✳</span><div><h2>Start with a brief</h2><p>Describe a new idea, or a change to the selected project.</p></div></div><form onSubmit={submit} className="brief-form"><label className="sr-only" htmlFor="brief">Project prompt</label><input id="brief" value={brief} onChange={event => setBrief(event.target.value)} placeholder="e.g. Plan a launch campaign… or “Add Stripe billing to this project”" maxLength={500} /><button type="submit" disabled={!brief.trim() || busy || routing}>{routing ? 'Reading…' : 'Continue'} <Icon name="arrow" /></button></form><div className="brief-note"><strong>Current project:</strong> {current.brief || 'None selected.'} <span>· New ideas create a project; change requests are confirmed first.</span></div></section>
+
+          {intent && <section className="intent-card" aria-live="polite">
+            {intent.kind === 'create' && <>
+              <span className="intent-badge">Create new project</span>
+              <p><strong>“{intent.prompt.slice(0, 120)}{intent.prompt.length > 120 ? '…' : ''}”</strong> reads as a new, self-contained idea. The current projects stay untouched; the new project starts with discovery questions.</p>
+              <div className="intent-actions"><button onClick={() => void confirmIntent()} disabled={busy}>Create new project</button><button className="intent-secondary" onClick={() => setIntent(null)} disabled={busy}>Cancel</button></div>
+            </>}
+            {intent.kind === 'update' && <>
+              <span className="intent-badge update">Change request · {intent.projectTitle}</span>
+              <p><strong>“{intent.prompt.slice(0, 120)}{intent.prompt.length > 120 ? '…' : ''}”</strong> will be proposed as a change to <strong>{intent.projectTitle}</strong>. Nothing is modified until you review the impact. {intent.reason}</p>
+              <div className="intent-actions"><button onClick={() => void confirmIntent()} disabled={busy}>Prepare change proposal</button><button className="intent-secondary" onClick={() => setIntent(null)} disabled={busy}>Cancel</button></div>
+            </>}
+            {intent.kind === 'ambiguous' && <>
+              <span className="intent-badge">What do you want to do?</span>
+              <p><strong>“{intent.prompt.slice(0, 120)}{intent.prompt.length > 120 ? '…' : ''}”</strong> could create a new project or change an existing one. {intent.reason}</p>
+              <div className="intent-actions">
+                <button onClick={() => setIntent({ ...intent, kind: 'create' })} disabled={busy}>Create a new project</button>
+                {workspace && <button onClick={() => setIntent({ ...intent, kind: 'update', projectId: workspace.id, projectTitle: current.brief.slice(0, 70) })} disabled={busy}>Update: {current.brief.slice(0, 40)}{current.brief.length > 40 ? '…' : ''}</button>}
+                {projects.filter(project => project.id !== workspace?.id).slice(0, 2).map(project => <button key={project.id} className="intent-secondary" onClick={() => setIntent({ ...intent, kind: 'update', projectId: project.id, projectTitle: project.brief.slice(0, 70) })} disabled={busy}>Update: {project.brief.slice(0, 36)}{project.brief.length > 36 ? '…' : ''}</button>)}
+                <button className="intent-secondary" onClick={() => setIntent(null)} disabled={busy}>Cancel</button>
+              </div>
+            </>}
+          </section>}
+
+          {pendingChangeRequest && <section className="change-request-card" aria-labelledby="cr-title">
+            <span className="intent-badge update">Change request awaiting approval</span>
+            <h3 id="cr-title">{pendingChangeRequest.proposedChanges.summary}</h3>
+            <p>Requested: “{pendingChangeRequest.prompt}”</p>
+            <div className="cr-impact">
+              <div><span className="section-kicker">PROPOSED IMPACT</span>
+                <ul>{['research', 'requirements', 'design', 'review'].map(stage => <li key={stage}>
+                  {pendingChangeRequest.proposedChanges.impactedStages.includes(stage) ? `✔ ${stage[0].toUpperCase()}${stage.slice(1)}: update task will be added` : `${stage[0].toUpperCase()}${stage.slice(1)}: unchanged`}
+                </li>)}</ul>
+              </div>
+              <div><span className="section-kicker">HISTORY</span><p>Completed tasks, approved deliverables, and saved website versions are never overwritten. Approved changes add new update tasks.</p></div>
+            </div>
+            <div className="intent-actions">
+              <button onClick={() => void applyChangeRequest(current.id!, pendingChangeRequest.id)} disabled={busy}>Approve changes</button>
+              <button className="intent-secondary" onClick={() => void mutate(`/api/projects/${current.id}/change-requests/${pendingChangeRequest.id}/cancel`, {})} disabled={busy}>Cancel</button>
+            </div>
+          </section>}
 
           {workspace?.mode === 'consultancy' && <section className="consultancy-section" aria-labelledby="discovery-title"><p className="eyebrow">DISCOVER → RESEARCH → REQUIREMENTS → DESIGN → REVIEW</p><h2 id="discovery-title">Understand the project</h2>
             {['questions', 'followup'].includes(workspace.discovery?.status || '') && <form className="discovery-form" onSubmit={async event => { event.preventDefault(); if (await mutate('/api/discovery/answers', { projectId: workspace.id, answers: { ...workspace.discovery?.answers, ...answers } })) setAnswers({}); }}>
@@ -315,7 +406,10 @@ export default function App() {
           </section>}
 
           <section className="progress-section"><div className="section-head"><div><p className="eyebrow">THE PROCESS</p><h2 id="process-title">{view === 'board' ? 'Work in motion' : 'Recent activity'}</h2></div><div className="section-actions"><span>{done} OF {current.tasks.length} COMPLETE</span><button onClick={() => void runStep()} disabled={!workspace || !canRun || !discoveryReady || busy || blocked || allDone || auto} title="Run one AI task"><Icon name="step" /> Step</button><button className="run-button" onClick={() => setAuto(value => !value)} disabled={!workspace || !canRun || !discoveryReady || blocked || allDone}><Icon name={auto ? 'pause' : 'play'} /> {auto ? 'Pause after task' : 'Run team'}</button></div></div>
-            {view === 'board' ? <div className="task-board">{columns.filter(column => column.status !== 'failed' || current.tasks.some(task => task.status === 'failed')).map(column => <div key={column.status} className="task-column"><div className="column-heading"><span className={`column-indicator ${column.status}`} /> {column.label} <span className="column-count">{current.tasks.filter(task => task.status === column.status).length}</span></div><div className="column-body">{current.tasks.filter(task => task.status === column.status).map(task => <div className="task-card" key={task.id}><span className="task-id">TASK 0{task.id}</span><h3>{task.title}</h3><p>{task.description}</p><div className="task-owner"><AgentAvatar id={task.owner} small />{agents.find(agent => agent.id === task.owner)?.name}{task.requiresApproval && <span className="approval-symbol" title="Approval required">✳</span>}</div>{task.output && <details className="task-output" open={task.status === 'review'}><summary>Read {task.feedback ? 'previous draft' : 'deliverable'}</summary><pre>{task.output}</pre></details>}{Boolean(task.revisions?.length) && <details className="task-output"><summary>Earlier drafts ({task.revisions?.length})</summary>{task.revisions?.map((revision, index) => <div key={index}><small>Replaced {new Date(revision.replacedAt).toLocaleString()}</small><pre>{revision.content}</pre></div>)}</details>}{task.error && <p className="task-error" role="alert">{task.error}</p>}{task.status === 'review' && <div className="review-actions"><label className="sr-only" htmlFor={`feedback-${task.id}`}>Revision feedback</label><textarea id={`feedback-${task.id}`} value={feedback[task.id] || ''} onChange={event => setFeedback(previous => ({ ...previous, [task.id]: event.target.value }))} maxLength={1000} placeholder="What should change? Required to revise." disabled={busy} /><button onClick={() => void decision(task, 'revise')} disabled={busy || !feedback[task.id]?.trim()}>Revise</button><button onClick={() => void decision(task, 'approve')} disabled={busy}>Approve</button></div>}{task.status === 'failed' && <button className="retry-button" onClick={() => void mutate(`/api/tasks/${task.id}/retry`, { projectId: workspace?.id })} disabled={busy}>Retry task</button>}</div>)}{!current.tasks.some(task => task.status === column.status) && <div className="empty-column">Nothing here yet</div>}</div></div>)}</div> : <div className="activity-list">{current.activity.map(entry => <div className="activity-row" key={entry.id}><AgentAvatar id={entry.agent} small /><span><strong>{agents.find(agent => agent.id === entry.agent)?.name}</strong> {entry.message}</span><time>{new Date(entry.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</time></div>)}{!current.activity.length && <div className="empty-column">No activity yet. Create a brief to begin.</div>}</div>}
+            {view === 'board' ? !workspace ? <div className="empty-column board-empty">No project selected. Start a brief below or pick a saved project from the sidebar.</div> : <div className="task-board">{columns.filter(column => column.status !== 'failed' || current.tasks.some(task => task.status === 'failed')).map(column => <div key={column.status} className="task-column"><div className="column-heading"><span className={`column-indicator ${column.status}`} /> {column.label} <span className="column-count">{current.tasks.filter(task => task.status === column.status).length}</span></div><div className="column-body">{current.tasks.filter(task => task.status === column.status).map(task => <div className="task-card" key={task.id}><span className="task-id">TASK 0{task.id}</span><h3>{task.title}</h3><p>{task.description}</p><div className="task-owner"><AgentAvatar id={task.owner} small />{agents.find(agent => agent.id === task.owner)?.name}{task.requiresApproval && <span className="approval-symbol" title="Approval required">✳</span>}</div>{task.output && <details className="task-output" open={task.status === 'review'}><summary>Read {task.feedback ? 'previous draft' : 'deliverable'}</summary><pre>{task.output}</pre></details>}{Boolean(task.revisions?.length) && <details className="task-output"><summary>Earlier drafts ({task.revisions?.length})</summary>{task.revisions?.map((revision, index) => <div key={index}><small>Replaced {new Date(revision.replacedAt).toLocaleString()}</small><pre>{revision.content}</pre></div>)}</details>}{task.error && <p className="task-error" role="alert">{task.error}</p>}{task.status === 'review' && <div className="review-actions"><label className="sr-only" htmlFor={`feedback-${task.id}`}>Revision feedback</label><textarea id={`feedback-${task.id}`} value={feedback[task.id] || ''} onChange={event => setFeedback(previous => ({ ...previous, [task.id]: event.target.value }))} maxLength={1000} placeholder="What should change? Required to revise." disabled={busy} /><button onClick={() => void decision(task, 'revise')} disabled={busy || !feedback[task.id]?.trim()}>Revise</button><button onClick={() => void decision(task, 'approve')} disabled={busy}>Approve</button></div>}{task.status === 'failed' && <button className="retry-button" onClick={() => void mutate(`/api/tasks/${task.id}/retry`, { projectId: workspace?.id })} disabled={busy}>Retry task</button>}</div>)}{!current.tasks.some(task => task.status === column.status) && <div className="empty-column">Nothing here yet</div>}</div></div>)}</div> : <div className="activity-list"><div className="activity-scope" role="group" aria-label="Activity scope"><button className={activityScope === 'current' ? 'active' : ''} onClick={() => setActivityScope('current')} aria-pressed={activityScope === 'current'}>Current project</button><button className={activityScope === 'all' ? 'active' : ''} onClick={() => setActivityScope('all')} aria-pressed={activityScope === 'all'}>All projects</button></div>
+              {activityScope === 'current' && <>{current.activity.map(entry => <div className="activity-row" key={entry.id}><AgentAvatar id={entry.agent} small /><span><strong>{agents.find(agent => agent.id === entry.agent)?.name}</strong> {entry.message}</span><time>{new Date(entry.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</time></div>)}{!current.activity.length && <div className="empty-column">No activity yet. Create a brief to begin.</div>}</>}
+              {allActivity !== null && <>{allActivity.map(entry => <div className="activity-row" key={entry.key}><AgentAvatar id={entry.agent} small /><span><strong>{agents.find(agent => agent.id === entry.agent)?.name}</strong> {entry.message}<small className="activity-project">{entry.projectTitle.slice(0, 50)}{entry.projectTitle.length > 50 ? '…' : ''}</small></span><time>{new Date(entry.time).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</time></div>)}{!allActivity.length && <div className="empty-column">No activity in any project yet.</div>}</>}
+            </div>}
           </section>
           {workspace && <section className="deliverable-section" aria-labelledby="deliverable-title">
             <div className="deliverable-head"><div><p className="eyebrow">YOUR OUTPUT</p><h2 id="deliverable-title">Project deliverables</h2></div><span>{workspace.artifact ? 'WEBSITE FILE READY' : allDone ? 'PLANS READY · WEBSITE NOT BUILT' : 'WORK IN PROGRESS'}</span></div>

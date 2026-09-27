@@ -1,11 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { failTask } from './workflow.mjs';
 
-const root = join(dirname(fileURLToPath(import.meta.url)), '..', 'data');
+const root = process.env.RELAY_DATA_DIR?.trim()
+  ? resolve(process.env.RELAY_DATA_DIR.trim())
+  : join(dirname(fileURLToPath(import.meta.url)), '..', 'data');
 export const dataFile = join(root, 'projects.json');
 export const legacyDataFile = join(root, 'workspace.json');
 
@@ -88,6 +90,9 @@ export function projectSummaries(store) {
       id: project.id, brief: project.brief, updatedAt: project.updatedAt || project.createdAt || '',
       completed: project.tasks.filter(task => task.status === 'done').length, total: project.tasks.length,
       websiteStage: project.artifact ? 'ready' : project.websiteDraft?.body ? 'page saved' : null,
+      recentActivity: project.activity.slice(0, 4).map(({ agent, message, time }) => ({ agent, message, time })),
+      pendingChangeRequests: Array.isArray(project.changeRequests)
+        ? project.changeRequests.filter(item => item?.status === 'awaiting_approval').length : 0,
     }))
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 }

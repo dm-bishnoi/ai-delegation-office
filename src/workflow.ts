@@ -56,6 +56,7 @@ export interface Workspace {
   designPreview?: { filename: string; content: string; kind: string; createdAt: string; stale?: boolean };
   tasks: Task[];
   activity: Entry[];
+  changeRequests?: ChangeRequest[];
   nextId: number;
   running?: boolean;
   artifact?: { kind: 'website'; filename: string; content: string; createdAt: string; model?: string; attempts?: number; version?: number; files?: { filename: string; content: string }[] };
@@ -68,6 +69,16 @@ export interface Workspace {
 
 export interface DiscoveryQuestion { key: string; question: string; options: string[] }
 
+export interface ChangeRequest {
+  id: string;
+  projectId: string;
+  prompt: string;
+  createdAt: string;
+  status: 'draft' | 'awaiting_approval' | 'approved' | 'applied' | 'cancelled';
+  proposedChanges: { summary: string; impactedStages: string[]; reopenTaskIds: number[] };
+  createdTaskIds: number[];
+}
+
 export interface ProjectSummary {
   id: string;
   brief: string;
@@ -75,6 +86,8 @@ export interface ProjectSummary {
   completed: number;
   total: number;
   websiteStage?: string | null;
+  recentActivity?: { agent: AgentId; message: string; time: string }[];
+  pendingChangeRequests?: number;
 }
 
 export const agents: Agent[] = [

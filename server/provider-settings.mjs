@@ -1,11 +1,13 @@
 import { createCipheriv, createDecipheriv, randomBytes, randomUUID } from 'node:crypto';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { providerEndpoint, providerInfo } from './provider.mjs';
 import { isOpenRouter } from './free-models.mjs';
 
-const dataDirectory = join(dirname(fileURLToPath(import.meta.url)), '..', 'data');
+const dataDirectory = process.env.RELAY_DATA_DIR?.trim()
+  ? resolve(process.env.RELAY_DATA_DIR.trim())
+  : join(dirname(fileURLToPath(import.meta.url)), '..', 'data');
 export const settingsFile = join(dataDirectory, 'providers.json');
 export const keyFile = join(dataDirectory, 'provider.key');
 

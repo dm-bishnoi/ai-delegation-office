@@ -10,6 +10,7 @@ import { activeProviderEnv, activeProviderInfo, loadProviderSettings, publicProv
 import { loadStore, projectSummaries, saveStore } from './store.mjs';
 import { answerDiscovery, completeConsultancyTask, decideBrief, makeConsultancyProject } from './consultancy.mjs';
 import { collectResearch, researchPlan } from './research.mjs';
+import { applyChangeRequest, cancelChangeRequest, proposeChangeRequest, routePrompt, routePromptWithAI } from './prompts.mjs';
 import { consumeTransaction, createTransaction, exchangeCode, OAuthFlowError, TRANSACTION_COOKIE } from './openrouter-oauth.mjs';
 import { saveOAuthProvider, providerCredential } from './provider-settings.mjs';
 import { refreshVerifiedFreeModels } from './free-model-pool.mjs';
@@ -216,6 +217,31 @@ const server = createServer(async (req, res) => {
         await saveStore(updated);
         catalog = updated;
         return json(res, 201, snapshot());
+      }
+      if (pathname === '/api/prompts/route') {
+        const text = typeof body?.prompt === 'string' ? body.prompt : '';
+        const routing = await routePromptWithAI(text, catalog.projects, activeProject(), { env: await activeProviderEnv(providerSettings) });
+        return json(res, 200, { routing, projects: projectSummaries(catalog) });
+      }
+      if (pathname === '/api/projects/route-change') {
+        const project = requireActive(body?.projectId);
+        const request = proposeChangeRequest(project, body?.prompt);
+        await saveStore(catalog);
+        return json(res, 201, snapshot());
+      }
+      const changeCancel = pathname.match(/^\/api\/projects\/([a-zA-Z0-9-]+)\/change-requests\/([a-zA-Z0-9-]+)\/cancel$/);
+      if (changeCancel) {
+        const project = requireActive(changeCancel[1]);
+        cancelChangeRequest(project, changeCancel[2]);
+        await saveStore(catalog);
+        return json(res, 200, snapshot());
+      }
+      const changeApply = pathname.match(/^\/api\/projects\/([a-zA-Z0-9-]+)\/change-requests\/([a-zA-Z0-9-]+)\/apply$/);
+      if (changeApply) {
+        const project = requireActive(changeApply[1]);
+        applyChangeRequest(project, changeApply[2]);
+        await saveStore(catalog);
+        return json(res, 200, snapshot());
       }
       const selection = pathname.match(/^\/api\/projects\/([a-zA-Z0-9-]+)\/select$/);
       if (selection) {

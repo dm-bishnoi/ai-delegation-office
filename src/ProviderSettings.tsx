@@ -18,6 +18,11 @@ async function request<T>(path: string, data?: object): Promise<T> {
   return payload as T;
 }
 
+const conciseModelId = (id: string) => {
+  const withoutNamespace = id.includes('/') ? id.slice(id.indexOf('/') + 1) : id;
+  return withoutNamespace.replace(/:free$/, '') || id;
+};
+
 export default function ProviderSettings({ busy, onUpdate, notice = '' }: { busy: boolean; onUpdate: () => Promise<void>; notice?: string }) {
   const [settings, setSettings] = useState<Settings | null>(null);
   const [preset, setPreset] = useState<Preset>('openrouter');
@@ -110,24 +115,44 @@ export default function ProviderSettings({ busy, onUpdate, notice = '' }: { busy
       <div className="provider-panel">
         <h2>Connected providers</h2>
         <p>Keys stay on the local Node server. An existing <code>.env</code> setup remains available.</p>
-        {settings?.providers.map(item => <div className="provider-row" key={item.id}>
-          <div><strong>{item.name}</strong><small>{item.model} · {item.baseUrl}{item.viaOAuth ? ' · connected via OpenRouter authorization' : ''}</small><span>{settings.activeId === item.id ? 'ACTIVE' : 'INACTIVE'}{item.baseUrl === presets.openrouter.baseUrl ? ` · FREE FALLBACK ${item.freeFallback ? 'ON' : 'OFF'}` : ''}</span></div>
+        {settings?.providers.map(item => <div className="provider-card" key={item.id}>
+          <div className="provider-card-head">
+            <strong>{item.name}</strong>
+            <span className="provider-chips">
+              <span className={`chip ${settings.activeId === item.id ? 'chip-active' : ''}`}>{settings.activeId === item.id ? 'Active' : 'Inactive'}</span>
+              {item.baseUrl === presets.openrouter.baseUrl && <span className="chip">Free fallback {item.freeFallback ? 'on' : 'off'}</span>}
+              {item.viaOAuth && <span className="chip chip-oauth">Via authorization</span>}
+            </span>
+          </div>
+          <div className="provider-card-model">
+            <span className="meta-label">Active model</span>
+            <span className="mono-ellipsis" title={item.model}>{item.model}</span>
+          </div>
           {settings.activeId === item.id && item.verifiedFreeModels?.length ? <div className="verified-models">
-            <span className="verified-models-label">Verified free models</span>
+            <div className="verified-models-head">
+              <span className="verified-models-label">Verified free models</span>
+              <small>Checked {new Date(item.verifiedFreeModels[0].verifiedAt).toLocaleTimeString()}</small>
+            </div>
             <ul>{item.verifiedFreeModels.map(model => <li key={model.id} className={model.id === item.model ? 'active-model' : ''}>
-              <button type="button" disabled={busy || saving || model.id === item.model} onClick={() => void change(async () => {
+              <button type="button" title={model.id} disabled={busy || saving || model.id === item.model} onClick={() => void change(async () => {
                 const updated = await request<Settings>('/api/providers/models/select', { id: item.id, model: model.id });
                 setSettings(updated); await onUpdate(); return updated;
-              }, `Active model set to ${model.id}.`)}>{model.id === item.model ? '▶ ' : '✓ '}{model.id}</button>
+              }, `Active model set to ${model.id}.`)}>
+                <span aria-hidden="true" className="model-marker">{model.id === item.model ? '▶' : '✓'}</span>
+                <span className="model-name">{conciseModelId(model.id)}</span>
+              </button>
             </li>)}</ul>
-            <small>Checked {new Date(item.verifiedFreeModels[0].verifiedAt).toLocaleTimeString()}</small>
-            <button type="button" className="provider-model-button" disabled={busy || saving} onClick={() => void refreshFreeModels()}>Refresh models</button>
           </div> : null}
+          <div className="provider-card-meta">
+            <div className="meta-line"><span className="meta-label">API URL</span><span className="mono-ellipsis" title={item.baseUrl}>{item.baseUrl}</span></div>
+            <div className="meta-line"><span className="meta-label">Connection</span><span>{item.viaOAuth ? 'OpenRouter authorization' : 'Manual API key'}</span></div>
+          </div>
           <div className="provider-actions">
-            {settings.activeId !== item.id && <button disabled={busy || saving} onClick={() => void change(() => request<Settings>('/api/providers/select', { id: item.id }), 'Provider selected.')}>Use</button>}
-            {settings.activeId === item.id && <button disabled={busy || saving} onClick={() => void test(item.id)}>{item.baseUrl === presets.openrouter.baseUrl ? 'Check API key' : 'Test connection'}</button>}
-            {item.id !== 'env' && item.baseUrl === presets.openrouter.baseUrl && <button disabled={busy || saving} onClick={() => void change(() => request<Settings>('/api/providers/fallback', { id: item.id, enabled: !item.freeFallback }), `Free-model fallback ${item.freeFallback ? 'disabled' : 'enabled'}.`)}>{item.freeFallback ? 'Disable fallback' : 'Enable fallback'}</button>}
-            {item.id !== 'env' && <button disabled={busy || saving} onClick={() => void change(() => request<Settings>('/api/providers/remove', { id: item.id }), 'Provider removed.')} aria-label={`Remove ${item.name}`}>Remove</button>}
+            {settings.activeId !== item.id && <button className="provider-secondary" disabled={busy || saving} onClick={() => void change(() => request<Settings>('/api/providers/select', { id: item.id }), 'Provider selected.')}>Use</button>}
+            {settings.activeId === item.id && <button className="provider-secondary" disabled={busy || saving} onClick={() => void test(item.id)}>{item.baseUrl === presets.openrouter.baseUrl ? 'Check API key' : 'Test connection'}</button>}
+            {settings.activeId === item.id && item.baseUrl === presets.openrouter.baseUrl && <button className="provider-secondary" disabled={busy || saving} onClick={() => void refreshFreeModels()}>Refresh models</button>}
+            {item.id !== 'env' && item.baseUrl === presets.openrouter.baseUrl && <button className="provider-secondary" disabled={busy || saving} onClick={() => void change(() => request<Settings>('/api/providers/fallback', { id: item.id, enabled: !item.freeFallback }), `Free-model fallback ${item.freeFallback ? 'disabled' : 'enabled'}.`)}>{item.freeFallback ? 'Disable fallback' : 'Enable fallback'}</button>}
+            {item.id !== 'env' && <button className="provider-danger" disabled={busy || saving} onClick={() => void change(() => request<Settings>('/api/providers/remove', { id: item.id }), 'Provider removed.')} aria-label={`Remove ${item.name}`}>Remove</button>}
           </div>
         </div>)}
         {!settings?.providers.length && <p>No provider connected yet.</p>}
@@ -136,18 +161,26 @@ export default function ProviderSettings({ busy, onUpdate, notice = '' }: { busy
       <form className="provider-panel provider-form" onSubmit={event => void add(event)}>
         <h2>Add a provider</h2>
         {preset === 'openrouter' && <div className="provider-oauth">
+          <span className="provider-oauth-label">Recommended</span>
           <a className="provider-oauth-button" href="/api/providers/openrouter/connect" onClick={event => { if (busy || saving) event.preventDefault(); }}>Connect OpenRouter</a>
-          <p className="provider-hint">Opens OpenRouter in your browser to approve access; the key is exchanged and stored on your local server only. This replaces any saved OpenRouter key connection. Or enter an API key manually below.</p>
+          <p className="provider-hint">Opens OpenRouter in your browser to approve access; the key is exchanged and stored on your local server only. This replaces any saved OpenRouter key connection.</p>
         </div>}
-        <label>Provider<select value={preset} onChange={event => choose(event.target.value as Preset)}>{Object.entries(presets).map(([key, item]) => <option key={key} value={key}>{item.label}</option>)}</select></label>
-        <label>Connection name<input value={name} onChange={event => setName(event.target.value)} required maxLength={60} /></label>
-        <label>API base URL<input value={baseUrl} onChange={event => { setBaseUrl(event.target.value); setModels([]); }} placeholder="https://provider.example/v1" required maxLength={250} spellCheck={false} /></label>
-        <label>Model ID<input list="available-models" value={model} onChange={event => setModel(event.target.value)} placeholder="Exact model identifier" required maxLength={160} spellCheck={false} /><datalist id="available-models">{models.map(id => <option key={id} value={id} />)}</datalist></label>
-        <label>API key {preset === 'ollama' && <span>(optional for local models)</span>}<input type="password" autoComplete="off" value={apiKey} onChange={event => setApiKey(event.target.value)} required={preset !== 'ollama'} maxLength={500} placeholder="Stored only on your local server" /></label>
-        {baseUrl.replace(/\/+$/, '') === presets.openrouter.baseUrl && <label className="provider-checkbox"><input type="checkbox" checked={freeFallback} onChange={event => setFreeFallback(event.target.checked)} /> Switch to up to two verified free models after rate limits or recoverable errors</label>}
-        <button className="provider-model-button" type="button" onClick={() => void loadModels()} disabled={saving || busy || !baseUrl || (preset !== 'ollama' && !apiKey)}>Load model IDs</button>
-        <button className="provider-submit" type="submit" disabled={saving || busy}>Save and select provider</button>
-        <p className="provider-hint">Remote connections use HTTPS. Local Ollama accepts HTTP. Free models can have daily limits; choosing a paid provider may incur charges.</p>
+        <details key={preset} className="provider-manual" open={preset !== 'openrouter'}>
+          <summary>{preset === 'openrouter' ? 'Manual API key setup (advanced)' : 'Connection details'}</summary>
+          <div className="provider-manual-body">
+            <label>Provider<select value={preset} onChange={event => choose(event.target.value as Preset)}>{Object.entries(presets).map(([key, item]) => <option key={key} value={key}>{item.label}</option>)}</select></label>
+            <label>Connection name<input value={name} onChange={event => setName(event.target.value)} required maxLength={60} /></label>
+            <label>API base URL<input value={baseUrl} onChange={event => { setBaseUrl(event.target.value); setModels([]); }} placeholder="https://provider.example/v1" required maxLength={250} spellCheck={false} /></label>
+            <label>Model ID<input list="available-models" value={model} onChange={event => setModel(event.target.value)} placeholder="Exact model identifier" required maxLength={160} spellCheck={false} /><datalist id="available-models">{models.map(id => <option key={id} value={id} />)}</datalist></label>
+            <label>API key {preset === 'ollama' && <span>(optional for local models)</span>}<input type="password" autoComplete="off" value={apiKey} onChange={event => setApiKey(event.target.value)} required={preset !== 'ollama'} maxLength={500} placeholder="Stored only on your local server" /></label>
+            {baseUrl.replace(/\/+$/, '') === presets.openrouter.baseUrl && <label className="provider-checkbox"><input type="checkbox" checked={freeFallback} onChange={event => setFreeFallback(event.target.checked)} /> Switch to up to two verified free models after rate limits or recoverable errors</label>}
+            <div className="provider-manual-actions">
+              <button className="provider-model-button" type="button" onClick={() => void loadModels()} disabled={saving || busy || !baseUrl || (preset !== 'ollama' && !apiKey)}>Load model IDs</button>
+              <button className="provider-submit" type="submit" disabled={saving || busy}>Save and select provider</button>
+            </div>
+            <p className="provider-hint">Remote connections use HTTPS. Local Ollama accepts HTTP. Free models can have daily limits; choosing a paid provider may incur charges.</p>
+          </div>
+        </details>
       </form>
     </div>
   </section>;
